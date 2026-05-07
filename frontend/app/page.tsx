@@ -255,7 +255,7 @@ function DecryptText({
   }, [text, delay])
   
   return (
-    <span className={className}>
+    <span className={className} suppressHydrationWarning>
       {displayText || text.split("").map(() => characters[Math.floor(Math.random() * characters.length)]).join("")}
     </span>
   )
@@ -485,7 +485,7 @@ function CTAButton() {
         className="group relative flex items-center gap-3 px-10 py-5 bg-gradient-to-r from-cyan-500 to-cyan-600 text-white font-semibold text-lg rounded-xl overflow-hidden transition-all duration-300 hover:shadow-[0_0_40px_rgba(34,211,238,0.4)] hover:scale-105"
       >
         <Zap className="w-5 h-5" />
-        <span>Start Live Monitoring</span>
+        <span>ACTIVATE CONTROL PANEL</span>
         <svg 
           className="w-5 h-5 transition-transform duration-300 group-hover:translate-x-1" 
           fill="none" 

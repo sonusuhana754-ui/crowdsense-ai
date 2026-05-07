@@ -8,9 +8,10 @@ interface WebcamFeedProps {
   label: string
   isActive: boolean
   onToggle: () => void
+  customFrame?: string
 }
 
-export function WebcamFeed({ label, isActive, onToggle }: WebcamFeedProps) {
+export function WebcamFeed({ label, isActive, onToggle, customFrame }: WebcamFeedProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const [fps, setFps] = useState(0)
@@ -18,20 +19,17 @@ export function WebcamFeed({ label, isActive, onToggle }: WebcamFeedProps) {
 
   const startCamera = useCallback(async () => {
     try {
-      setError(null)
+      if (typeof window === 'undefined' || !navigator.mediaDevices) return
       const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { 
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          facingMode: "user"
-        } 
+        video: { width: 1280, height: 720, frameRate: 30 } 
       })
       if (videoRef.current) {
         videoRef.current.srcObject = stream
-        streamRef.current = stream
       }
+      streamRef.current = stream
+      setError(null)
     } catch (err) {
-      console.error("[v0] Failed to start webcam:", err)
+      console.error("Webcam access denied:", err)
       setError("Camera access denied")
     }
   }, [])
@@ -48,24 +46,23 @@ export function WebcamFeed({ label, isActive, onToggle }: WebcamFeedProps) {
 
   useEffect(() => {
     if (isActive) {
-      startCamera()
+      // Only use local webcam if it's CAM 01
+      if (label.includes("01")) {
+        startCamera()
+      }
+      
+      const interval = setInterval(() => {
+        setFps(Math.floor(28 + Math.random() * 4))
+      }, 1000)
+      return () => {
+        clearInterval(interval)
+        stopCamera()
+      }
     } else {
+      setFps(0)
       stopCamera()
     }
-    return () => stopCamera()
-  }, [isActive, startCamera, stopCamera])
-
-  // Simulated FPS counter
-  useEffect(() => {
-    if (!isActive) {
-      setFps(0)
-      return
-    }
-    const interval = setInterval(() => {
-      setFps(Math.floor(28 + Math.random() * 4))
-    }, 1000)
-    return () => clearInterval(interval)
-  }, [isActive])
+  }, [isActive, label, startCamera, stopCamera])
 
   return (
     <motion.div 
@@ -92,8 +89,17 @@ export function WebcamFeed({ label, isActive, onToggle }: WebcamFeedProps) {
       
       {/* Video Container */}
       <div className="aspect-video bg-[#05080d] relative">
-        {isActive ? (
+        {customFrame ? (
           <>
+             <img src={`data:image/jpeg;base64,${customFrame}`} className="w-full h-full object-cover" />
+             {/* Scanning Overlay */}
+             <div className="absolute inset-0 pointer-events-none">
+               <motion.div className="absolute inset-x-0 h-[2px] bg-gradient-to-r from-transparent via-[#00d4ff] to-transparent opacity-30" animate={{ top: ['0%', '100%'] }} transition={{ duration: 2, repeat: Infinity, ease: "linear" }} />
+             </div>
+          </>
+        ) : isActive ? (
+          <>
+            {/* Local Video Feed */}
             <video
               ref={videoRef}
               autoPlay
@@ -101,6 +107,15 @@ export function WebcamFeed({ label, isActive, onToggle }: WebcamFeedProps) {
               muted
               className="w-full h-full object-cover"
             />
+            
+            {/* Error Message */}
+            {error && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/60 z-30">
+                <div className="bg-[#05080d] border border-[#ff3a3a] px-4 py-2 rounded text-[#ff3a3a] font-mono text-xs uppercase tracking-widest shadow-[0_0_15px_rgba(255,58,58,0.3)]">
+                  {error}
+                </div>
+              </div>
+            )}
             
             {/* Scanning Overlay */}
             <div className="absolute inset-0 pointer-events-none">
@@ -155,11 +170,6 @@ export function WebcamFeed({ label, isActive, onToggle }: WebcamFeedProps) {
               AI PROCESSING
             </div>
           </>
-        ) : error ? (
-          <div className="flex flex-col items-center justify-center h-full">
-            <Camera className="w-8 h-8 md:w-12 md:h-12 text-[#ff0000] mb-2" />
-            <span className="font-mono text-[10px] md:text-xs text-[#ff0000]">{error}</span>
-          </div>
         ) : (
           <div className="flex flex-col items-center justify-center h-full">
             <Camera className="w-8 h-8 md:w-12 md:h-12 text-[#5a6f85] mb-2" />

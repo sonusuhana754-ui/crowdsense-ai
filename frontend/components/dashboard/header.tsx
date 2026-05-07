@@ -19,9 +19,11 @@ export function DashboardHeader({ currentTime }: DashboardHeaderProps) {
     >
       <div className="flex items-center justify-between">
         <Link href="/" className="flex items-center gap-2 md:gap-3">
-          <AlertTriangle className="w-6 h-6 md:w-7 md:h-7 text-[#ff3a3a]" style={{ filter: 'drop-shadow(0 0 8px rgba(255, 58, 58, 0.6))' }} />
+          <svg className="w-6 h-6 md:w-7 md:h-7 text-[#00d4ff]" style={{ filter: 'drop-shadow(0 0 8px rgba(0, 212, 255, 0.6))' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+          </svg>
           <div className="font-mono text-sm md:text-lg font-bold tracking-wider flex items-center gap-1">
-            <span className="text-[#ff3a3a]" style={{ textShadow: '0 0 10px rgba(255, 58, 58, 0.5)' }}>DISCLAIMER</span>
+            <span className="text-[#00d4ff]" style={{ textShadow: '0 0 10px rgba(0, 212, 255, 0.5)' }}>COMMAND CENTER</span>
             <span className="hidden md:inline text-[#8aa0b4] font-normal ml-3 text-xs tracking-wider">
               | AMD MI300X POWERED
             </span>
