@@ -1,8 +1,6 @@
 # 🚨 CrowdSense AI — Frontend Dashboard
 
-<div align="center">
 
-![CrowdSense AI Banner](./assets/banner.png)
 
 ### AI-Powered Crowd Surveillance & Risk Intelligence Dashboard
 
@@ -25,34 +23,6 @@ The CrowdSense AI frontend is a futuristic command-center dashboard designed to 
 - 📜 Live alert logs
 
 The UI is designed to simulate a professional security operations center (SOC) using a cinematic cyber-defense aesthetic.
-
----
-
-# 🖼️ Dashboard Preview
-
-## Landing Page
-
-![Landing Page](./assets/landing-page.png)
-
----
-
-## AI Surveillance Dashboard
-
-![Dashboard](./assets/dashboard-main.png)
-
----
-
-## Multi Camera Monitoring
-
-![Camera Grid](./assets/camera-grid.png)
-
----
-
-## Risk Intelligence System
-
-![Risk Panel](./assets/risk-panel.png)
-
----
 
 # 🎨 Frontend Design Features
 
