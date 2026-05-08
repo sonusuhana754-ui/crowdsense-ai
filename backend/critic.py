@@ -7,18 +7,26 @@
 
 import requests
 import json
+import os
+from dotenv import load_dotenv
 
-# Same switch as reasoning.py
-USE_GROQ = True
+load_dotenv()
 
-if USE_GROQ:
-    API_URL = "https://api.groq.com/openai/v1/chat/completions"
-    API_KEY = "REPLACED_SECRET"
-    MODEL = "llama-3.1-8b-instant"
+_PROVIDER = os.getenv("AI_PROVIDER", "groq").lower()
+
+if _PROVIDER == "amd":
+    API_URL = os.getenv("AMD_TEXT_URL", "https://api.inference.amd.com/v1/chat/completions")
+    API_KEY = os.getenv("AMD_API_KEY", "")
+    MODEL   = os.getenv("AMD_TEXT_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
+    print(f"[Critic] Provider: AMD  |  Model: {MODEL}")
 else:
-    API_URL = "http://YOUR_AMD_IP:8001/v1/chat/completions"
-    API_KEY = ""
-    MODEL = "mistralai/Mistral-7B-Instruct-v0.3"
+    API_URL = "https://api.groq.com/openai/v1/chat/completions"
+    API_KEY = os.getenv("GROQ_API_KEY", "")
+    MODEL   = "llama-3.3-70b-versatile"
+    print(f"[Critic] Provider: Groq  |  Model: {MODEL}")
+
+if not API_KEY:
+    print(f"[Critic] ⚠️  API key not set — check .env")
 
 
 def critique_and_refine(vision_data, initial_assessment):
@@ -28,8 +36,12 @@ def critique_and_refine(vision_data, initial_assessment):
     Returns improved final assessment.
     """
 
-    prompt = f"""You are the SENIOR crowd safety analyst reviewing a junior analyst's report.
-Your job is to be critical and improve their assessment. Do not blindly agree.
+    # Handle concern_areas being either a list or string
+    concern_areas = vision_data.get('concern_areas', 'none')
+    if isinstance(concern_areas, list):
+        concern_areas = '; '.join(concern_areas)
+
+    prompt = f"""You are the SENIOR crowd safety director reviewing a junior analyst's report. You have final authority. Your job is to challenge, correct, and improve — not rubber-stamp.
 
 ORIGINAL SCENE DATA:
 - Crowd density: {vision_data.get('crowd_density')}
@@ -37,7 +49,13 @@ ORIGINAL SCENE DATA:
 - Behavior: {', '.join(vision_data.get('body_language', []))}
 - Distress visible: {vision_data.get('visible_distress')}
 - People count: {vision_data.get('crowd_count_estimate')}
-- Problem areas: {vision_data.get('concern_areas')}
+- Bottleneck: {vision_data.get('bottleneck_detected')} at {vision_data.get('bottleneck_location', 'none')}
+- Immediate threats: {', '.join(vision_data.get('immediate_threats', ['none']))}
+- Problem areas: {concern_areas}
+- Zone North: {vision_data.get('zone_descriptions', {}).get('north', 'unknown')}
+- Zone South: {vision_data.get('zone_descriptions', {}).get('south', 'unknown')}
+- Zone East: {vision_data.get('zone_descriptions', {}).get('east', 'unknown')}
+- Zone West: {vision_data.get('zone_descriptions', {}).get('west', 'unknown')}
 
 JUNIOR ANALYST'S ASSESSMENT:
 - Risk Level: {initial_assessment.get('risk_level')}/10
@@ -49,27 +67,27 @@ JUNIOR ANALYST'S ASSESSMENT:
 - Reasoning: {initial_assessment.get('reasoning')}
 - Confidence: {initial_assessment.get('confidence')}%
 
-REVIEW QUESTIONS (think about each):
-1. Is the risk level too high (false alarm) or too low (dangerous underestimate)?
-2. Did they correctly identify the most dangerous zone?
-3. Is the time estimate realistic?
-4. What did they MISS that you can see in the data?
-5. Should emergency services be called or is this manageable?
+As senior director, critically evaluate:
+1. Is the risk level calibrated correctly? (Overreaction causes panic; underreaction causes deaths)
+2. Did they correctly identify the most dangerous zone based on crowd physics?
+3. Is the time estimate realistic given the density and movement data?
+4. What crowd dynamics did they miss? (Compression waves, exit blocking, herding behavior)
+5. Does this require emergency services or can venue security handle it?
 
-Respond ONLY in this JSON format:
+Respond ONLY in this exact JSON format, no extra text:
 {{
-  "final_risk_level": number 1-10,
+  "final_risk_level": <integer 1-10>,
   "final_collective_intent": "panic/celebration/evacuation/normal/confusion/surge",
   "final_primary_danger": "stampede/crush/bottleneck/surge/suffocation/none",
   "final_most_dangerous_zone": "north/south/east/west/center",
-  "final_minutes_until_critical": number or null,
-  "final_is_critical": true or false,
-  "what_junior_missed": "what the first analyst got wrong or missed",
-  "what_junior_got_right": "what they assessed correctly",
-  "final_key_risk": "the most important single risk factor",
-  "final_reasoning": "your complete improved assessment in 2-3 sentences",
-  "call_emergency_services": true or false,
-  "final_confidence": number 0-100
+  "final_minutes_until_critical": <integer or null>,
+  "final_is_critical": <true or false>,
+  "what_junior_missed": "<specific crowd dynamics or data point the junior analyst overlooked>",
+  "what_junior_got_right": "<what they correctly identified>",
+  "final_key_risk": "<the single most critical risk factor right now>",
+  "final_reasoning": "<your authoritative 2-3 sentence assessment with specific crowd physics reasoning>",
+  "call_emergency_services": <true or false>,
+  "final_confidence": <integer 0-100>
 }}"""
 
     headers = {
@@ -84,7 +102,7 @@ Respond ONLY in this JSON format:
             json={
                 "model": MODEL,
                 "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 600,
+                "max_tokens": 400,
                 "temperature": 0.1
             },
             timeout=30
@@ -96,14 +114,29 @@ Respond ONLY in this JSON format:
         result = json.loads(ai_text[start:end])
         return result
 
-    except Exception as e:
-        print(f"Critic failed: {e}")
-        # If critic fails, return initial assessment in final format
+    except requests.exceptions.ConnectionError:
+        print(f"[Critic] ❌ Network error — cannot reach Groq API")
         return {
             "final_risk_level": initial_assessment.get("risk_level", 5),
             "final_collective_intent": initial_assessment.get("collective_intent", "unknown"),
             "final_primary_danger": initial_assessment.get("primary_danger", "unknown"),
-            "final_most_dangerous_zone": initial_assessment.get("most_dangerous_zone", "unknown"),
+            "final_most_dangerous_zone": initial_assessment.get("most_dangerous_zone", "south"),
+            "final_minutes_until_critical": initial_assessment.get("minutes_until_critical"),
+            "final_is_critical": initial_assessment.get("is_already_critical", False),
+            "what_junior_missed": "Network unavailable — check internet connection",
+            "what_junior_got_right": "Initial assessment used as fallback",
+            "final_key_risk": initial_assessment.get("key_risk_factor", "unknown"),
+            "final_reasoning": "Cannot reach AI API. Check internet and GROQ_API_KEY in .env",
+            "call_emergency_services": initial_assessment.get("risk_level", 0) >= 8,
+            "final_confidence": 0
+        }
+    except Exception as e:
+        print(f"[Critic] ❌ Failed: {e}")
+        return {
+            "final_risk_level": initial_assessment.get("risk_level", 5),
+            "final_collective_intent": initial_assessment.get("collective_intent", "unknown"),
+            "final_primary_danger": initial_assessment.get("primary_danger", "unknown"),
+            "final_most_dangerous_zone": initial_assessment.get("most_dangerous_zone", "south"),
             "final_minutes_until_critical": initial_assessment.get("minutes_until_critical"),
             "final_is_critical": initial_assessment.get("is_already_critical", False),
             "what_junior_missed": "Critic unavailable",

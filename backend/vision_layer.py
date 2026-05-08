@@ -9,21 +9,30 @@ import requests
 import json
 import threading
 import time
+import os
 from datetime import datetime
+from dotenv import load_dotenv
 
 # ============================================================
-# CONFIG — Change these when switching to AMD
+# CONFIG — driven entirely by .env AI_PROVIDER
 # ============================================================
-USE_GROQ = True  # False when AMD ready
+load_dotenv()
 
-if USE_GROQ:
-    VISION_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-    VISION_API_KEY = "REPLACED_SECRET"
-    VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct" # Llama 4 Multimodal model on Groq
+_PROVIDER = os.getenv("AI_PROVIDER", "groq").lower()
+
+if _PROVIDER == "amd":
+    VISION_API_URL = os.getenv("AMD_VISION_URL", "https://api.inference.amd.com/v1/chat/completions")
+    VISION_API_KEY = os.getenv("AMD_API_KEY", "")
+    VISION_MODEL   = os.getenv("AMD_VISION_MODEL", "Qwen/Qwen2-VL-7B-Instruct")
+    print(f"[VisionLayer] Provider: AMD  |  Model: {VISION_MODEL}")
 else:
-    VISION_API_URL = "http://YOUR_AMD_IP:8000/v1/chat/completions"
-    VISION_API_KEY = ""
-    VISION_MODEL = "Qwen/Qwen2-VL-7B-Instruct"
+    VISION_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+    VISION_API_KEY = os.getenv("GROQ_API_KEY", "")
+    VISION_MODEL   = "meta-llama/llama-4-scout-17b-16e-instruct"
+    print(f"[VisionLayer] Provider: Groq  |  Model: {VISION_MODEL}")
+
+if not VISION_API_KEY:
+    print(f"[VisionLayer] ⚠️  API key not set — check .env ({_PROVIDER.upper()}_API_KEY)")
 
 # ============================================================
 # VENUE MAP — System learns the venue on startup
@@ -55,8 +64,13 @@ VENUE_MAP = {
 
 
 def frame_to_base64(frame):
-    """Convert OpenCV frame to base64 string for API"""
-    _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    """Convert OpenCV frame to base64 string for API — compressed for speed"""
+    # Resize to max 640px wide to reduce payload size and API latency
+    h, w = frame.shape[:2]
+    if w > 640:
+        scale = 640 / w
+        frame = cv2.resize(frame, (640, int(h * scale)), interpolation=cv2.INTER_AREA)
+    _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
     return base64.b64encode(buffer).decode('utf-8')
 
 
@@ -138,12 +152,14 @@ Return ONLY this JSON, nothing else:
             
         return json.loads(text[start:end])
 
+    except requests.exceptions.ConnectionError as e:
+        print(f"[Vision] ❌ Network error — check internet connection: {e}")
+        return _fallback_result("Network unreachable — check internet connection")
+    except requests.exceptions.Timeout:
+        print(f"[Vision] ❌ Request timed out")
+        return _fallback_result("API request timed out")
     except Exception as e:
         print(f"[Vision] ❌ Analysis failed: {e}")
-        try:
-            print(f"[Vision] Response text: {response.text}")
-        except:
-            pass
         return _fallback_result(str(e))
 
 def _fallback_result(reason: str):

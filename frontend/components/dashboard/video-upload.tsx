@@ -4,19 +4,32 @@ import { useRef, useState, useCallback } from "react"
 import { motion } from "framer-motion"
 import { Upload, Play, Pause, RotateCcw, Film } from "lucide-react"
 
+export interface VideoAnalysisResult {
+  success: boolean
+  vision: any
+  audio: any
+  initial: any
+  final: any
+  commands: any
+}
+
 interface VideoUploadProps {
   label: string
   onVideoAnalysis?: (isAnalyzing: boolean) => void
+  onAnalysisResult?: (result: VideoAnalysisResult) => void
 }
 
-export function VideoUpload({ label, onVideoAnalysis }: VideoUploadProps) {
+export function VideoUpload({ label, onVideoAnalysis, onAnalysisResult }: VideoUploadProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const fileRef = useRef<File | null>(null)
   const [videoUrl, setVideoUrl] = useState<string | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
   const [progress, setProgress] = useState(0)
+  const [detectedCount, setDetectedCount] = useState<number | null>(null)
+  const [analysisError, setAnalysisError] = useState<string | null>(null)
 
   const handleFile = useCallback((file: File) => {
     const validTypes = ['video/mp4', 'video/webm', 'video/quicktime', 'video/x-msvideo']
@@ -26,10 +39,13 @@ export function VideoUpload({ label, onVideoAnalysis }: VideoUploadProps) {
     }
 
     const url = URL.createObjectURL(file)
+    fileRef.current = file
     setVideoUrl(url)
     setIsPlaying(false)
     setIsAnalyzing(false)
     setProgress(0)
+    setDetectedCount(null)
+    setAnalysisError(null)
   }, [])
 
   const handleDrop = useCallback((e: React.DragEvent) => {
@@ -53,6 +69,31 @@ export function VideoUpload({ label, onVideoAnalysis }: VideoUploadProps) {
     if (file) handleFile(file)
   }, [handleFile])
 
+  const sendToBackend = useCallback(async (file: File) => {
+    try {
+      const formData = new FormData()
+      formData.append("video", file)
+      const res = await fetch("http://127.0.0.1:8080/analyze", {
+        method: "POST",
+        body: formData,
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const result: VideoAnalysisResult = await res.json()
+      setDetectedCount(result.vision?.crowd_count_estimate ?? null)
+      onAnalysisResult?.(result)
+    } catch (err: any) {
+      console.error("Video analysis failed:", err)
+      if (err?.message?.includes("fetch") || err?.name === "TypeError") {
+        setAnalysisError("Backend offline — start the server first")
+      } else {
+        setAnalysisError(`Analysis failed: ${err.message}`)
+      }
+    } finally {
+      setIsAnalyzing(false)
+      onVideoAnalysis?.(false)
+    }
+  }, [onAnalysisResult, onVideoAnalysis])
+
   const togglePlay = useCallback(() => {
     if (!videoRef.current) return
     
@@ -62,11 +103,13 @@ export function VideoUpload({ label, onVideoAnalysis }: VideoUploadProps) {
       videoRef.current.play()
       if (!isAnalyzing) {
         setIsAnalyzing(true)
+        setAnalysisError(null)
         onVideoAnalysis?.(true)
+        if (fileRef.current) sendToBackend(fileRef.current)
       }
     }
     setIsPlaying(!isPlaying)
-  }, [isPlaying, isAnalyzing, onVideoAnalysis])
+  }, [isPlaying, isAnalyzing, onVideoAnalysis, sendToBackend])
 
   const handleTimeUpdate = useCallback(() => {
     if (!videoRef.current) return
@@ -85,6 +128,9 @@ export function VideoUpload({ label, onVideoAnalysis }: VideoUploadProps) {
     setIsPlaying(false)
     setIsAnalyzing(false)
     setProgress(0)
+    setDetectedCount(null)
+    setAnalysisError(null)
+    fileRef.current = null
     if (inputRef.current) inputRef.current.value = ''
   }, [])
 
@@ -170,8 +216,13 @@ export function VideoUpload({ label, onVideoAnalysis }: VideoUploadProps) {
                 
                 {/* Count overlay */}
                 <div className="absolute top-4 left-4 bg-black/70 px-2 py-1 rounded font-mono text-[10px] text-[#00d4ff]">
-                  DETECTED: <span className="text-[#00ff9d]">{Math.floor(progress / 10 + 15)}</span>
+                  DETECTED: <span className="text-[#00ff9d]">{detectedCount !== null ? detectedCount : "..."}</span>
                 </div>
+                {analysisError && (
+                  <div className="absolute bottom-4 left-4 bg-black/70 px-2 py-1 rounded font-mono text-[10px] text-[#ff3a3a]">
+                    {analysisError}
+                  </div>
+                )}
               </div>
             )}
             

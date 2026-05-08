@@ -251,14 +251,43 @@ def intelligence_thread(interval_seconds=12):
             continue
 
         # Aggregate vision results across all cameras
+        # Pick the worst-case density label from any camera
+        density_order = ["critical", "high", "medium", "low", "empty", "unknown", "normal"]
+        all_densities = [v.get("crowd_density", "unknown") for v in vision_results.values()]
+        best_density = next((d for d in density_order if d in all_densities), "unknown")
+
+        # Pick most common movement pattern
+        movements = [v.get("movement_pattern", "unknown") for v in vision_results.values() if v.get("movement_pattern")]
+        dominant_movement = max(set(movements), key=movements.count) if movements else "unknown"
+
+        # Merge zone descriptions — prefer CAM-1, fall back to any camera
+        zone_desc = {}
+        for cam_id in ["CAM-1", "CAM-2"] + list(vision_results.keys()):
+            zd = vision_results.get(cam_id, {}).get("zone_descriptions", {})
+            if zd:
+                zone_desc = zd
+                break
+
+        # Merge immediate threats
+        all_threats = list(set(
+            t for v in vision_results.values()
+            for t in v.get("immediate_threats", [])
+            if t and t != "none"
+        )) or ["none"]
+
         agg_vision = {
             "crowd_count_estimate": sum(v.get("crowd_count_estimate", 0) for v in vision_results.values()),
             "risk_score": max((v.get("risk_score", 0) for v in vision_results.values()), default=0),
-            "crowd_density": "high" if any(v.get("risk_score", 0) >= 7 for v in vision_results.values()) else "normal",
-            "movement_pattern": "mixed",
+            "crowd_density": best_density,
+            "movement_pattern": dominant_movement,
             "body_language": list(set([item for v in vision_results.values() for item in v.get("body_language", [])])),
             "visible_distress": any(v.get("visible_distress", False) for v in vision_results.values()),
-            "zone_descriptions": vision_results.get("CAM-1", {}).get("zone_descriptions", {}),
+            "bottleneck_detected": any(v.get("bottleneck_detected", False) for v in vision_results.values()),
+            "bottleneck_location": next((v.get("bottleneck_location") for v in vision_results.values() if v.get("bottleneck_detected")), "none"),
+            "visible_exits_status": next((v.get("visible_exits_status", "unknown") for v in vision_results.values()), "unknown"),
+            "safe_direction": next((v.get("safe_direction", "unknown") for v in vision_results.values()), "unknown"),
+            "immediate_threats": all_threats,
+            "zone_descriptions": zone_desc,
             "concern_areas": [f"{cam}: {v.get('scene_description', '')}" for cam, v in vision_results.items()]
         }
 

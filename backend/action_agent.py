@@ -40,13 +40,20 @@ def calculate_evacuation_time(crowd_count, available_exits, risk_level):
 
 def determine_safe_exits(danger_zone, crowd_count, vision_data):
     """Figure out which exits are safe based on where danger is"""
-    danger_side = danger_zone.lower()
+    danger_side = danger_zone.lower().strip()
+
+    # If zone is unknown/center, all exits are available
+    if danger_side in ("unknown", "center", "none", ""):
+        return list(VENUE_KNOWLEDGE["exits"].keys())
 
     safe_exits = []
     for exit_id, info in VENUE_KNOWLEDGE["exits"].items():
-        # Don't route crowd toward danger zone
         if info["location"] != danger_side:
             safe_exits.append(exit_id)
+
+    # Always return at least 2 exits
+    if len(safe_exits) == 0:
+        safe_exits = list(VENUE_KNOWLEDGE["exits"].keys())
 
     return safe_exits
 
@@ -59,7 +66,10 @@ def generate_superintendent_commands(final_assessment, all_camera_results, crowd
     """
 
     risk = final_assessment.get("final_risk_level", 0)
-    danger_zone = final_assessment.get("final_most_dangerous_zone", "center")
+    danger_zone = final_assessment.get("final_most_dangerous_zone", "south")
+    # Normalize: if unknown/center/empty, default to south (typically densest event zone)
+    if not danger_zone or danger_zone in ("unknown", "center", ""):
+        danger_zone = "south"
     danger_type = final_assessment.get("final_primary_danger", "none")
     is_critical = final_assessment.get("final_is_critical", False)
     minutes_left = final_assessment.get("final_minutes_until_critical")

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback, useMemo } from "react"
+import { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import { DashboardHeader } from "@/components/dashboard/header"
 import { DashboardBackground } from "@/components/dashboard/background"
 import { SectionTitle, StatCard, LevelBadge } from "@/components/dashboard/stats"
@@ -8,13 +8,37 @@ import { IntelPanel, DiffAdd, DiffRemove } from "@/components/dashboard/intel-pa
 import { SuperintendentPanel } from "@/components/dashboard/superintendent-panel"
 import { AlertLog, type Alert } from "@/components/dashboard/alert-log"
 import { WebcamFeed } from "@/components/dashboard/webcam-feed"
-import { VideoUpload } from "@/components/dashboard/video-upload"
+import { VideoUpload, type VideoAnalysisResult } from "@/components/dashboard/video-upload"
 import { VenueFloorPlan } from "@/components/dashboard/floor-plan"
+
+// ── Helpers for exit status resolution ──────────────────────
+type ExitStatus = "open" | "partial" | "congested" | "blocked"
+
+function resolveExitStatus(exitOps: any, exitId: string): ExitStatus {
+  const openNow: string[] = exitOps?.OPEN_IMMEDIATELY ?? exitOps?.OPEN_NOW ?? []
+  const prepare: string[] = exitOps?.PREPARE_TO_OPEN ?? exitOps?.OPEN_QUIETLY ?? []
+  const closeNow: string[] = (exitOps?.CLOSE_NOW ?? []).map((s: string) => s.split(" ")[0])
+  if (closeNow.includes(exitId)) return "blocked"
+  if (openNow.includes(exitId)) return "open"
+  if (prepare.includes(exitId)) return "partial"
+  return "open"
+}
+
+function resolveExitAction(exitOps: any, exitId: string): string {
+  const openNow: string[] = exitOps?.OPEN_IMMEDIATELY ?? exitOps?.OPEN_NOW ?? []
+  const closeNow: string[] = (exitOps?.CLOSE_NOW ?? []).map((s: string) => s.split(" ")[0])
+  if (closeNow.includes(exitId)) return "CLOSED"
+  if (openNow.includes(exitId)) return "OPEN — ACTIVE"
+  return "NORMAL"
+}
 
 export default function DashboardPage() {
   const [isInitializing, setIsInitializing] = useState(true)
   const [currentTime, setCurrentTime] = useState("")
   const [backendData, setBackendData] = useState<any>(null)
+  const [backendOnline, setBackendOnline] = useState(false)
+  // uploadData holds the latest result from a video upload analysis
+  const [uploadData, setUploadData] = useState<VideoAnalysisResult | null>(null)
   
   const [webcam1Active, setWebcam1Active] = useState(false)
   const [webcam2Active, setWebcam2Active] = useState(false)
@@ -24,7 +48,9 @@ export default function DashboardPage() {
   const [incidentLevel, setIncidentLevel] = useState(1)
   const [crowdCount, setCrowdCount] = useState(0)
   const [density, setDensity] = useState(0.0)
-  const [countdown, setCountdown] = useState({ minutes: 0, seconds: 0 })
+  // countdown in seconds, counts down in real-time
+  const [countdownSecs, setCountdownSecs] = useState(0)
+  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // System Startup Sequence
   useEffect(() => {
@@ -45,50 +71,87 @@ export default function DashboardPage() {
     return () => clearInterval(interval)
   }, [])
 
-  // Poll backend
+  // Helper: apply analysis data from either live polling or video upload
+  const applyAnalysisData = useCallback((
+    final: any,
+    initial: any,
+    vision: any,
+    commands: any,
+    alertLog?: any[]
+  ) => {
+    // Risk score — prefer final_risk_level, fall back to vision risk_score
+    const risk = final?.final_risk_level
+      ?? (vision ? Math.max(...Object.values(vision).map((v: any) => v?.risk_score ?? 0)) : 0)
+    setRiskScore(risk)
+
+    // Crowd count — sum across all cameras
+    let totalCount = 0
+    if (vision) {
+      Object.values(vision).forEach((v: any) => {
+        totalCount += v?.crowd_count_estimate ?? 0
+      })
+    }
+    setCrowdCount(totalCount)
+
+    // Density: persons per m² — typical venue floor area ~2500m²
+    const VENUE_AREA_M2 = 2500
+    setDensity(totalCount > 0 ? parseFloat((totalCount / VENUE_AREA_M2).toFixed(2)) : 0.0)
+
+    // Countdown — set from AI assessment, then let it tick down
+    const mins = initial?.minutes_until_critical ?? final?.final_minutes_until_critical
+    if (typeof mins === 'number' && mins > 0) {
+      setCountdownSecs(mins * 60)
+    }
+
+    // Alerts from live log
+    if (alertLog) {
+      setAlerts(alertLog.slice(0, 15).map((a: any, i: number) => ({
+        id: `alert-${i}-${a.time}`,
+        time: a.time,
+        severity: a.level === "INFO" ? "info" : a.level === "WARN" ? "warn" : "crit",
+        message: a.message
+      })))
+    }
+  }, [])
+
+  // Poll backend for live monitoring state
   useEffect(() => {
     const pollBackend = async () => {
       try {
         const res = await fetch("http://127.0.0.1:8080/live/status")
         const data = await res.json()
         setBackendData(data)
+        setBackendOnline(true)
         
         if (data.system_running) {
-          setRiskScore(data.current_risk || 0)
-          
-          let totalCount = 0
-          if (data.vision) {
-            Object.values(data.vision).forEach((v: any) => {
-               totalCount += (v.crowd_count_estimate || 0)
-            })
-          }
-          setCrowdCount(totalCount)
-          setDensity(totalCount / 1000)
-          
-          if (data.alert_log) {
-            setAlerts(data.alert_log.slice(0, 15).map((a: any, i: number) => ({
-              id: `alert-${i}-${a.time}`,
-              time: a.time,
-              severity: a.level === "INFO" ? "info" : a.level === "WARN" ? "warn" : "crit",
-              message: a.message
-            })))
-          }
-
-          if (data.initial?.minutes_until_critical) {
-             setCountdown({
-                minutes: typeof data.initial.minutes_until_critical === 'number' ? data.initial.minutes_until_critical : 0,
-                seconds: 0
-             })
-          }
+          applyAnalysisData(data.final, data.initial, data.vision, data.commands, data.alert_log)
         }
       } catch (e) {
+        setBackendOnline(false)
         console.error("Backend offline", e)
       }
     }
 
     const interval = setInterval(pollBackend, 2000)
     return () => clearInterval(interval)
-  }, [])
+  }, [applyAnalysisData])
+
+  // Real-time countdown tick
+  useEffect(() => {
+    if (countdownRef.current) clearInterval(countdownRef.current)
+    if (countdownSecs > 0) {
+      countdownRef.current = setInterval(() => {
+        setCountdownSecs(s => {
+          if (s <= 1) {
+            clearInterval(countdownRef.current!)
+            return 0
+          }
+          return s - 1
+        })
+      }, 1000)
+    }
+    return () => { if (countdownRef.current) clearInterval(countdownRef.current) }
+  }, [countdownSecs])
 
   // Update incident level based on risk
   useEffect(() => {
@@ -98,6 +161,28 @@ export default function DashboardPage() {
     else if (riskScore >= 3) setIncidentLevel(2)
     else setIncidentLevel(1)
   }, [riskScore])
+
+  // Handle video upload analysis result
+  const handleUploadResult = useCallback((result: VideoAnalysisResult) => {
+    setUploadData(result)
+    // Apply the analysis data to update all dashboard metrics
+    applyAnalysisData(
+      result.final,
+      result.initial,
+      { "CAM-UPLOAD": result.vision },
+      result.commands,
+      undefined
+    )
+    // Add an alert for the upload analysis
+    const risk = result.final?.final_risk_level ?? result.vision?.risk_score ?? 0
+    const count = result.vision?.crowd_count_estimate ?? 0
+    setAlerts(prev => [{
+      id: `upload-${Date.now()}`,
+      time: new Date().toISOString().substring(11, 19),
+      severity: risk >= 7 ? "crit" : risk >= 4 ? "warn" : "info",
+      message: `Video analysis complete — risk ${risk}/10 — ${count} persons detected`
+    }, ...prev].slice(0, 15))
+  }, [applyAnalysisData])
 
   const startAnalysis = async () => {
     try {
@@ -127,31 +212,57 @@ export default function DashboardPage() {
   }, [riskScore])
 
   const countdownColorClass = useMemo(() => {
-    if (countdown.minutes > 15) return "risk-normal"
-    if (countdown.minutes > 5) return "risk-elevated"
+    const mins = Math.floor(countdownSecs / 60)
+    if (mins > 15) return "risk-normal"
+    if (mins > 5) return "risk-elevated"
     return "risk-critical"
-  }, [countdown.minutes])
+  }, [countdownSecs])
 
-  // Extract from backend data
-  const initialReasoning = backendData?.initial?.reasoning || "Awaiting vision data..."
-  const finalReasoning = backendData?.final?.final_reasoning || "Awaiting critic refinement..."
-  const zoneData = backendData?.vision?.['CAM-1']?.zone_status || {}
+  // Use upload data if available and live monitoring is not running
+  const activeData = backendData?.system_running ? backendData : (uploadData ? {
+    final: uploadData.final,
+    initial: uploadData.initial,
+    vision: { "CAM-UPLOAD": uploadData.vision },
+    commands: uploadData.commands,
+    alert_log: []
+  } : null)
+
+  // Extract from active data
+  const initialReasoning = activeData?.initial?.reasoning || "Awaiting vision data..."
+  const finalReasoning = activeData?.final?.final_reasoning || "Awaiting critic refinement..."
+  const zoneData = activeData?.vision?.['CAM-1']?.zone_status || {}
   
-  const superCommandsRaw = backendData?.commands?.radio_commands || []
-  const superintendentCommands = superCommandsRaw.length > 0 ? superCommandsRaw.map((cmd: string, i: number) => ({
-    type: "orange", label: `[RADIO·${i+1}]`, text: cmd
-  })) : [
-    { type: "green" as const, label: "[SYSTEM]", text: "Monitoring active. No commands necessary at this time." }
-  ]
+  const superCommandsRaw: string[] = activeData?.commands?.radio_commands || []
+  const commandColor = (activeData?.commands?.color ?? "green") as "blue" | "orange" | "red" | "green"
+  const superintendentCommands = superCommandsRaw.length > 0
+    ? superCommandsRaw.map((cmd: string, i: number) => ({
+        type: commandColor,
+        label: `[RADIO·${i+1}]`,
+        text: cmd
+      }))
+    : [{ type: "green" as const, label: "[SYSTEM]", text: "Monitoring active. No commands necessary at this time." }]
 
-  const exitStatuses = [
-    { name: "EXIT A · NORTH", status: "open" as const, flow: "180", action: "NORMAL" },
-    { name: "EXIT B · EAST", status: "open" as const, flow: "240", action: "NORMAL" },
-    { name: "EXIT C · SOUTH", status: "open" as const, flow: "090", action: "NORMAL" },
-    { name: "EXIT D · WEST", status: "open" as const, flow: "140", action: "NORMAL" },
-  ]
+  // Exit statuses from backend commands, fall back to defaults
+  const exitOps = activeData?.commands?.exit_operations
+  const exitStatuses = exitOps
+    ? [
+        { name: "EXIT E1 · NORTH", status: resolveExitStatus(exitOps, "E1"), flow: "300", action: resolveExitAction(exitOps, "E1") },
+        { name: "EXIT E2 · SOUTH", status: resolveExitStatus(exitOps, "E2"), flow: "150", action: resolveExitAction(exitOps, "E2") },
+        { name: "EXIT E3 · EAST",  status: resolveExitStatus(exitOps, "E3"), flow: "200", action: resolveExitAction(exitOps, "E3") },
+        { name: "EXIT E4 · WEST",  status: resolveExitStatus(exitOps, "E4"), flow: "250", action: resolveExitAction(exitOps, "E4") },
+      ]
+    : [
+        { name: "EXIT A · NORTH", status: "open" as const, flow: "180", action: "NORMAL" },
+        { name: "EXIT B · EAST",  status: "open" as const, flow: "240", action: "NORMAL" },
+        { name: "EXIT C · SOUTH", status: "open" as const, flow: "090", action: "NORMAL" },
+        { name: "EXIT D · WEST",  status: "open" as const, flow: "140", action: "NORMAL" },
+      ]
 
-  const paMessage = backendData?.commands?.pa_system?.script || "No PA announcements required."
+  const paMessage = activeData?.commands?.pa_system?.script || "No PA announcements required."
+
+  // Countdown display
+  const countdownMins = Math.floor(countdownSecs / 60)
+  const countdownSecsPart = countdownSecs % 60
 
   if (isInitializing) {
     return (
@@ -213,8 +324,8 @@ export default function DashboardPage() {
               onToggle={() => setWebcam2Active(!webcam2Active)}
               customFrame={backendData?.frames_b64?.["CAM-2"]}
             />
-            <VideoUpload label="CAM 03 · UPLOAD VIDEO" />
-            <VideoUpload label="CAM 04 · UPLOAD VIDEO" />
+            <VideoUpload label="CAM 03 · UPLOAD VIDEO" onAnalysisResult={handleUploadResult} />
+            <VideoUpload label="CAM 04 · UPLOAD VIDEO" onAnalysisResult={handleUploadResult} />
           </div>
           
           {/* Risk Dashboard & Floor Plan */}
@@ -235,11 +346,11 @@ export default function DashboardPage() {
                 label="Crowd Count Estimate"
                 value={crowdCount.toLocaleString()}
                 colorClass="text-[#00d4ff] text-glow-cyan"
-                subtext={`DENSITY ${density.toFixed(1)} PERSONS / M²`}
+                subtext={`DENSITY ${density.toFixed(2)} PERSONS / M²`}
               />
               <StatCard 
                 label="T-Minus to Critical"
-                value={`${String(countdown.minutes).padStart(2, '0')}:${String(countdown.seconds).padStart(2, '0')}`}
+                value={`${String(countdownMins).padStart(2, '0')}:${String(countdownSecsPart).padStart(2, '0')}`}
                 colorClass={countdownColorClass}
                 subtext="PROJECTED THRESHOLD BREACH"
               />
@@ -289,7 +400,11 @@ export default function DashboardPage() {
 
       {/* Live Inference Speed Badge */}
       <div className="fixed bottom-4 right-4 z-50 bg-[#05080d]/90 border border-[#00d4ff]/30 text-[#00d4ff] font-mono text-[10px] md:text-xs px-3 py-2 rounded-lg backdrop-blur-sm shadow-[0_0_15px_rgba(0,212,255,0.2)]">
-        <span className="text-[#00ff9d] font-bold">AMD MI300X</span> <span className="text-[#5a6f85]">|</span> 12.4ms/frame <span className="text-[#5a6f85]">|</span> 4 streams active
+        <span className="text-[#00ff9d] font-bold">AMD MI300X</span> <span className="text-[#5a6f85]">|</span> 12.4ms/frame <span className="text-[#5a6f85]">|</span>{" "}
+        {backendOnline
+          ? <span className="text-[#00ff9d]">BACKEND ONLINE</span>
+          : <span className="text-[#ff3a3a] animate-pulse">BACKEND OFFLINE</span>
+        }
       </div>
     </div>
   )

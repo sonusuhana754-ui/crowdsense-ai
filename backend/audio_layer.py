@@ -5,14 +5,46 @@
 import os
 import subprocess
 import tempfile
+from dotenv import load_dotenv
+load_dotenv()
+
+# ── Patch PATH with bundled ffmpeg BEFORE importing Whisper ──
+try:
+    import imageio_ffmpeg
+    FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
+    ffmpeg_dir = os.path.dirname(FFMPEG_PATH)
+    os.environ["PATH"] = ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
+    print(f"[AudioLayer] Bundled ffmpeg: {FFMPEG_PATH}")
+except Exception:
+    FFMPEG_PATH = "ffmpeg"
+    print("[AudioLayer] Using system ffmpeg")
 
 # ── Whisper (AMD specified audio model) ──────────────────────
 try:
+    import numpy as _np
     import whisper
-    # 'small' = better accuracy than 'base', still fast on AMD MI300X
-    _whisper_model = whisper.load_model("small")
+    import whisper.audio as _whisper_audio
+
+    # Monkey-patch whisper's load_audio to use our bundled ffmpeg path
+    # Required on Windows where PATH changes don't propagate to subprocesses
+    def _patched_load_audio(file: str, sr: int = 16000):
+        cmd = [
+            FFMPEG_PATH, "-nostdin", "-threads", "0",
+            "-i", file, "-f", "s16le", "-ac", "1",
+            "-acodec", "pcm_s16le", "-ar", str(sr), "-"
+        ]
+        try:
+            out = subprocess.run(cmd, capture_output=True, check=True).stdout
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"Failed to load audio: {e.stderr.decode()}") from e
+        return _np.frombuffer(out, _np.int16).flatten().astype(_np.float32) / 32768.0
+
+    _whisper_audio.load_audio = _patched_load_audio
+
+    _whisper_model_name = os.getenv("WHISPER_MODEL", "tiny")
+    _whisper_model = whisper.load_model(_whisper_model_name)
     WHISPER_OK = True
-    print("[AudioLayer] Whisper 'small' loaded [OK]")
+    print(f"[AudioLayer] Whisper '{_whisper_model_name}' loaded [OK]")
 except Exception as e:
     WHISPER_OK = False
     print(f"[AudioLayer] Whisper not available: {e}. Install: pip install openai-whisper")
@@ -115,12 +147,15 @@ def analyze_live_audio(duration_seconds: int = 5) -> dict:
 # ─────────────────────────────────────────────────────────────
 
 def _extract_audio(video_path: str):
-    """Use ffmpeg to pull audio out of video as 16kHz mono WAV."""
+    """Use ffmpeg to pull first 30s of audio as 16kHz mono WAV."""
     out_path = video_path.replace(".mp4", "_tmp_audio.wav")
+    if out_path == video_path:
+        out_path = video_path + "_tmp_audio.wav"
 
     cmd = [
-        "ffmpeg",
+        FFMPEG_PATH,
         "-i", video_path,
+        "-t", "30",          # only first 30 seconds — enough for panic detection
         "-ac", "1",          # mono
         "-ar", "16000",      # 16kHz — Whisper's required rate
         "-vn",               # no video
@@ -129,7 +164,14 @@ def _extract_audio(video_path: str):
         "-loglevel", "quiet"
     ]
 
-    result = subprocess.run(cmd, capture_output=True)
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=60)
+    except FileNotFoundError:
+        print("  [Audio] ffmpeg not found — install via: pip install imageio[ffmpeg]")
+        return None
+    except subprocess.TimeoutExpired:
+        print("  [Audio] ffmpeg timed out")
+        return None
 
     if result.returncode != 0 or not os.path.exists(out_path):
         print("  [Audio] ffmpeg extraction failed — video may have no audio track")
@@ -154,13 +196,17 @@ def _transcribe(audio_path: str) -> dict:
         print("  [Audio] Running Whisper transcription...")
         raw = _whisper_model.transcribe(
             audio_path,
-            language=None,       # auto-detect — important for international use
+            language=None,                  # auto-detect language
             task="transcribe",
-            fp16=False           # set True on AMD GPU for speed
+            fp16=False,
+            beam_size=1,                    # greedy decode — 3x faster, sufficient for panic detection
+            best_of=1,
+            condition_on_previous_text=False,
+            temperature=0.0,
         )
         text = raw["text"].strip()
         detected_lang = raw.get("language", "unknown")
-        print(f"  [Audio] Transcribed ({detected_lang}): '{text[:60]}...'")
+        print(f"  [Audio] Transcribed ({detected_lang}): '{text[:60]}'")
         return _score(text, detected_lang)
 
     except Exception as e:

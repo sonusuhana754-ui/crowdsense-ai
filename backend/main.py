@@ -4,6 +4,7 @@ from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import tempfile, os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from backend.vision_layer  import analyze_video
 from backend.audio_layer   import analyze_audio
@@ -18,6 +19,9 @@ app = FastAPI(title="CrowdSense AI", version="1.0")
 app.add_middleware(CORSMiddleware,
     allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
+# Shared thread pool — reused across requests
+_executor = ThreadPoolExecutor(max_workers=4)
+
 
 # ── ROUTES ───────────────────────────────────────────────────
 
@@ -28,18 +32,35 @@ def health():
 
 @app.post("/analyze")
 async def analyze_video_upload(video: UploadFile = File(...)):
-    """One-shot: upload video → full pipeline → results."""
+    """One-shot: upload video → full parallel pipeline → results."""
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as f:
         f.write(await video.read())
         path = f.name
+
     try:
-        vision  = analyze_video(path)
-        audio   = analyze_audio(path)
-        fused   = fuse_inputs(vision, audio)
-        initial = reason_about_scene(fused)
-        final   = critique_and_refine(vision, initial)
-        commands = generate_superintendent_commands(
-                        final, {}, vision.get("crowd_count_estimate", 0))
+        import asyncio
+        loop = asyncio.get_event_loop()
+
+        # ── STAGE 1: Vision + Audio in parallel ──────────────
+        vision_future = loop.run_in_executor(_executor, analyze_video, path)
+        audio_future  = loop.run_in_executor(_executor, analyze_audio, path)
+        vision, audio = await asyncio.gather(vision_future, audio_future)
+
+        # ── STAGE 2: Fuse (instant) ───────────────────────────
+        fused = fuse_inputs(vision, audio)
+
+        # ── STAGE 3: Reasoning + Critic in parallel ───────────
+        # Critic needs initial result, so run reasoning first then critic
+        # But we can overlap: start reasoning, then critic immediately after
+        initial = await loop.run_in_executor(_executor, reason_about_scene, fused)
+
+        # Run critic and commands generation concurrently
+        critic_future   = loop.run_in_executor(_executor, critique_and_refine, vision, initial)
+        final = await critic_future
+
+        crowd_count = vision.get("crowd_count_estimate", 0) if vision else 0
+        commands = generate_superintendent_commands(final, {}, crowd_count)
+
         return {
             "success": True,
             "vision": vision, "audio": audio,
@@ -47,7 +68,10 @@ async def analyze_video_upload(video: UploadFile = File(...)):
             "commands": commands
         }
     finally:
-        os.remove(path)
+        try:
+            os.remove(path)
+        except Exception:
+            pass
 
 
 @app.post("/live/start")
@@ -65,5 +89,5 @@ def stop_live():
 
 @app.get("/live/status")
 def live_status():
-    """Dashboard polls this every 5 seconds to get fresh data."""
+    """Dashboard polls this every 2 seconds to get fresh data."""
     return JSONResponse(content=state.get_snapshot())
