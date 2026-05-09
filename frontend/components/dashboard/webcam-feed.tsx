@@ -17,6 +17,9 @@ export function WebcamFeed({ label, isActive, onToggle, customFrame }: WebcamFee
   const [fps, setFps] = useState(0)
   const [error, setError] = useState<string | null>(null)
 
+  // CAM 01 = local webcam, others = backend frame stream
+  const isLocalWebcam = label.includes("01")
+
   const startCamera = useCallback(async () => {
     try {
       if (typeof window === 'undefined' || !navigator.mediaDevices) return
@@ -45,12 +48,8 @@ export function WebcamFeed({ label, isActive, onToggle, customFrame }: WebcamFee
   }, [])
 
   useEffect(() => {
-    if (isActive) {
-      // Only use local webcam if it's CAM 01
-      if (label.includes("01")) {
-        startCamera()
-      }
-      
+    if (isActive && isLocalWebcam) {
+      startCamera()
       const interval = setInterval(() => {
         setFps(Math.floor(28 + Math.random() * 4))
       }, 1000)
@@ -58,11 +57,11 @@ export function WebcamFeed({ label, isActive, onToggle, customFrame }: WebcamFee
         clearInterval(interval)
         stopCamera()
       }
-    } else {
+    } else if (!isActive) {
       setFps(0)
-      stopCamera()
+      if (isLocalWebcam) stopCamera()
     }
-  }, [isActive, label, startCamera, stopCamera])
+  }, [isActive, isLocalWebcam, startCamera, stopCamera])
 
   return (
     <motion.div 
@@ -89,17 +88,9 @@ export function WebcamFeed({ label, isActive, onToggle, customFrame }: WebcamFee
       
       {/* Video Container */}
       <div className="aspect-video bg-[#05080d] relative">
-        {customFrame ? (
+        {/* CAM-01: always show live browser webcam — never replace with backend JPEG */}
+        {isLocalWebcam && isActive ? (
           <>
-             <img src={`data:image/jpeg;base64,${customFrame}`} className="w-full h-full object-cover" />
-             {/* Scanning Overlay */}
-             <div className="absolute inset-0 pointer-events-none">
-               <motion.div className="absolute inset-x-0 h-[2px] bg-gradient-to-r from-transparent via-[#00d4ff] to-transparent opacity-30" animate={{ top: ['0%', '100%'] }} transition={{ duration: 2, repeat: Infinity, ease: "linear" }} />
-             </div>
-          </>
-        ) : isActive ? (
-          <>
-            {/* Local Video Feed */}
             <video
               ref={videoRef}
               autoPlay
@@ -107,69 +98,47 @@ export function WebcamFeed({ label, isActive, onToggle, customFrame }: WebcamFee
               muted
               className="w-full h-full object-cover"
             />
-            
-            {/* Error Message */}
             {error && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/60 z-30">
-                <div className="bg-[#05080d] border border-[#ff3a3a] px-4 py-2 rounded text-[#ff3a3a] font-mono text-xs uppercase tracking-widest shadow-[0_0_15px_rgba(255,58,58,0.3)]">
+                <div className="bg-[#05080d] border border-[#ff3a3a] px-4 py-2 rounded text-[#ff3a3a] font-mono text-xs uppercase tracking-widest">
                   {error}
                 </div>
               </div>
             )}
-            
-            {/* Scanning Overlay */}
+            {/* Scanning overlay */}
             <div className="absolute inset-0 pointer-events-none">
-              {/* Scan lines */}
-              <motion.div
-                className="absolute inset-x-0 h-[2px] bg-gradient-to-r from-transparent via-[#00d4ff] to-transparent opacity-30"
-                animate={{ top: ['0%', '100%'] }}
-                transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-              />
-              
-              {/* Corner markers */}
+              <motion.div className="absolute inset-x-0 h-[2px] bg-gradient-to-r from-transparent via-[#00d4ff] to-transparent opacity-30" animate={{ top: ['0%', '100%'] }} transition={{ duration: 2, repeat: Infinity, ease: "linear" }} />
               <div className="absolute top-4 left-4 w-8 h-8 border-l-2 border-t-2 border-[#00d4ff]/60" />
               <div className="absolute top-4 right-4 w-8 h-8 border-r-2 border-t-2 border-[#00d4ff]/60" />
               <div className="absolute bottom-4 left-4 w-8 h-8 border-l-2 border-b-2 border-[#00d4ff]/60" />
               <div className="absolute bottom-4 right-4 w-8 h-8 border-r-2 border-b-2 border-[#00d4ff]/60" />
-              
-              {/* Detection boxes animation */}
-              <motion.div
-                className="absolute border-2 border-[#00ff9d] rounded"
-                style={{ width: '15%', height: '25%' }}
-                animate={{
-                  left: ['20%', '60%', '30%', '50%'],
-                  top: ['30%', '50%', '20%', '40%'],
-                  opacity: [0.8, 0.6, 0.8, 0.6]
-                }}
-                transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
-              />
-              <motion.div
-                className="absolute border-2 border-[#ffd000] rounded"
-                style={{ width: '12%', height: '20%' }}
-                animate={{
-                  left: ['50%', '25%', '65%', '35%'],
-                  top: ['45%', '25%', '55%', '35%'],
-                  opacity: [0.6, 0.8, 0.6, 0.8]
-                }}
-                transition={{ duration: 5, repeat: Infinity, ease: "easeInOut" }}
-              />
+              <motion.div className="absolute border-2 border-[#00ff9d] rounded" style={{ width: '15%', height: '25%' }} animate={{ left: ['20%', '60%', '30%', '50%'], top: ['30%', '50%', '20%', '40%'], opacity: [0.8, 0.6, 0.8, 0.6] }} transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }} />
+              <motion.div className="absolute border-2 border-[#ffd000] rounded" style={{ width: '12%', height: '20%' }} animate={{ left: ['50%', '25%', '65%', '35%'], top: ['45%', '25%', '55%', '35%'], opacity: [0.6, 0.8, 0.6, 0.8] }} transition={{ duration: 5, repeat: Infinity, ease: "easeInOut" }} />
             </div>
-            
-            {/* FPS Counter */}
-            <div className="absolute bottom-2 left-2 bg-black/70 px-2 py-1 rounded font-mono text-[9px] md:text-[10px] text-[#00ff9d]">
-              {fps} FPS
-            </div>
-            
-            {/* AI Status */}
+            <div className="absolute bottom-2 left-2 bg-black/70 px-2 py-1 rounded font-mono text-[9px] md:text-[10px] text-[#00ff9d]">{fps} FPS</div>
             <div className="absolute bottom-2 right-2 bg-black/70 px-2 py-1 rounded font-mono text-[9px] md:text-[10px] text-[#00d4ff] flex items-center gap-1.5">
-              <motion.div 
-                className="w-1.5 h-1.5 rounded-full bg-[#00d4ff]"
-                animate={{ opacity: [1, 0.3, 1] }}
-                transition={{ duration: 1, repeat: Infinity }}
-              />
+              <motion.div className="w-1.5 h-1.5 rounded-full bg-[#00d4ff]" animate={{ opacity: [1, 0.3, 1] }} transition={{ duration: 1, repeat: Infinity }} />
               AI PROCESSING
             </div>
           </>
+        ) : !isLocalWebcam && customFrame ? (
+          /* CAM-02: show backend frame stream */
+          <>
+            <img src={`data:image/jpeg;base64,${customFrame}`} className="w-full h-full object-cover" alt="camera feed" />
+            <div className="absolute inset-0 pointer-events-none">
+              <motion.div className="absolute inset-x-0 h-[2px] bg-gradient-to-r from-transparent via-[#00d4ff] to-transparent opacity-30" animate={{ top: ['0%', '100%'] }} transition={{ duration: 2, repeat: Infinity, ease: "linear" }} />
+            </div>
+            <div className="absolute bottom-2 right-2 bg-black/70 px-2 py-1 rounded font-mono text-[9px] md:text-[10px] text-[#00d4ff] flex items-center gap-1.5">
+              <motion.div className="w-1.5 h-1.5 rounded-full bg-[#00d4ff]" animate={{ opacity: [1, 0.3, 1] }} transition={{ duration: 1, repeat: Infinity }} />
+              AI PROCESSING
+            </div>
+          </>
+        ) : isActive && !isLocalWebcam ? (
+          /* CAM-02 active but no frame yet */
+          <div className="flex flex-col items-center justify-center h-full">
+            <motion.div className="w-8 h-8 border-2 border-[#00d4ff] border-t-transparent rounded-full" animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: "linear" }} />
+            <span className="font-mono text-[10px] text-[#5a6f85] mt-2">LOADING FEED...</span>
+          </div>
         ) : (
           <div className="flex flex-col items-center justify-center h-full">
             <Camera className="w-8 h-8 md:w-12 md:h-12 text-[#5a6f85] mb-2" />

@@ -22,7 +22,7 @@ if _PROVIDER == "amd":
 else:
     API_URL = "https://api.groq.com/openai/v1/chat/completions"
     API_KEY = os.getenv("GROQ_API_KEY", "")
-    MODEL   = "llama-3.3-70b-versatile"
+    MODEL   = "llama-3.1-8b-instant"   # 8B instant — 6x cheaper tokens than 70B, resets daily
     print(f"[Critic] Provider: Groq  |  Model: {MODEL}")
 
 if not API_KEY:
@@ -95,54 +95,56 @@ Respond ONLY in this exact JSON format, no extra text:
         "Content-Type": "application/json"
     }
 
-    try:
-        response = requests.post(
-            API_URL,
-            headers=headers,
-            json={
-                "model": MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 400,
-                "temperature": 0.1
-            },
-            timeout=30
-        )
+    for attempt in range(3):
+        try:
+            response = requests.post(
+                API_URL,
+                headers=headers,
+                json={
+                    "model": MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 400,
+                    "temperature": 0.1
+                },
+                timeout=30
+            )
+            data = response.json()
+            if "choices" not in data:
+                err = data.get("error", {})
+                if err.get("code") == "rate_limit_exceeded" and attempt < 2:
+                    import time as _t
+                    wait = 10 * (attempt + 1)
+                    print(f"[Critic] Rate limit — waiting {wait}s (attempt {attempt+1}/3)")
+                    _t.sleep(wait)
+                    continue
+                raise ValueError(f"API error: {err.get('message', data)}")
 
-        ai_text = response.json()["choices"][0]["message"]["content"]
-        start = ai_text.find("{")
-        end = ai_text.rfind("}") + 1
-        result = json.loads(ai_text[start:end])
-        return result
+            ai_text = data["choices"][0]["message"]["content"]
+            start = ai_text.find("{")
+            end = ai_text.rfind("}") + 1
+            return json.loads(ai_text[start:end])
 
-    except requests.exceptions.ConnectionError:
-        print(f"[Critic] ❌ Network error — cannot reach Groq API")
-        return {
-            "final_risk_level": initial_assessment.get("risk_level", 5),
-            "final_collective_intent": initial_assessment.get("collective_intent", "unknown"),
-            "final_primary_danger": initial_assessment.get("primary_danger", "unknown"),
-            "final_most_dangerous_zone": initial_assessment.get("most_dangerous_zone", "south"),
-            "final_minutes_until_critical": initial_assessment.get("minutes_until_critical"),
-            "final_is_critical": initial_assessment.get("is_already_critical", False),
-            "what_junior_missed": "Network unavailable — check internet connection",
-            "what_junior_got_right": "Initial assessment used as fallback",
-            "final_key_risk": initial_assessment.get("key_risk_factor", "unknown"),
-            "final_reasoning": "Cannot reach AI API. Check internet and GROQ_API_KEY in .env",
-            "call_emergency_services": initial_assessment.get("risk_level", 0) >= 8,
-            "final_confidence": 0
-        }
-    except Exception as e:
-        print(f"[Critic] ❌ Failed: {e}")
-        return {
-            "final_risk_level": initial_assessment.get("risk_level", 5),
-            "final_collective_intent": initial_assessment.get("collective_intent", "unknown"),
-            "final_primary_danger": initial_assessment.get("primary_danger", "unknown"),
-            "final_most_dangerous_zone": initial_assessment.get("most_dangerous_zone", "south"),
-            "final_minutes_until_critical": initial_assessment.get("minutes_until_critical"),
-            "final_is_critical": initial_assessment.get("is_already_critical", False),
-            "what_junior_missed": "Critic unavailable",
-            "what_junior_got_right": "Initial assessment used as fallback",
-            "final_key_risk": initial_assessment.get("key_risk_factor", "unknown"),
-            "final_reasoning": initial_assessment.get("reasoning", ""),
-            "call_emergency_services": initial_assessment.get("risk_level", 0) >= 8,
-            "final_confidence": initial_assessment.get("confidence", 30)
-        }
+        except requests.exceptions.ConnectionError:
+            print(f"[Critic] ❌ Network error")
+            break
+        except Exception as e:
+            print(f"[Critic] ❌ Failed (attempt {attempt+1}): {e}")
+            if attempt < 2:
+                import time as _t; _t.sleep(5)
+            continue
+
+    # All attempts failed — pass through initial assessment
+    return {
+        "final_risk_level": initial_assessment.get("risk_level", 5),
+        "final_collective_intent": initial_assessment.get("collective_intent", "unknown"),
+        "final_primary_danger": initial_assessment.get("primary_danger", "unknown"),
+        "final_most_dangerous_zone": initial_assessment.get("most_dangerous_zone", "south"),
+        "final_minutes_until_critical": initial_assessment.get("minutes_until_critical"),
+        "final_is_critical": initial_assessment.get("is_already_critical", False),
+        "what_junior_missed": "Critic unavailable — using junior assessment",
+        "what_junior_got_right": "Initial assessment used as final",
+        "final_key_risk": initial_assessment.get("key_risk_factor", "unknown"),
+        "final_reasoning": initial_assessment.get("reasoning", ""),
+        "call_emergency_services": initial_assessment.get("risk_level", 0) >= 8,
+        "final_confidence": initial_assessment.get("confidence", 30)
+    }

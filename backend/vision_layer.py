@@ -79,24 +79,46 @@ def analyze_frame(frame, camera_id="CAM-1", venue_context=""):
 
     image_b64 = frame_to_base64(frame)
 
-    prompt = f"""You are an advanced crowd safety AI monitoring system for a security command center.
+    prompt = f"""You are an expert crowd safety AI for a real-time security command center. Your job is to ACCURATELY assess risk — not to be conservative. Underestimating risk costs lives.
+
+CAMERA: {camera_id}  |  TIME: {datetime.now().strftime('%H:%M:%S')}
 
 VENUE CONTEXT:
-{venue_context}
+{venue_context if venue_context else "Large public venue, capacity 5000, 4 exits (North/South/East/West)"}
 
-CAMERA: {camera_id}
-TIME: {datetime.now().strftime('%H:%M:%S')}
+━━━ STRICT CALIBRATION — USE THESE THRESHOLDS ━━━
 
-Analyze this crowd scene with the precision of an expert security superintendent.
-Look for: crowd density, movement patterns, danger signs, bottlenecks, distress.
+CROWD DENSITY (count visible people carefully):
+  empty    = 0–5 people visible
+  low      = 6–30 people, free movement everywhere
+  medium   = 31–100 people, some congestion forming
+  high     = 101–300 people, movement restricted, shoulder-to-shoulder
+  critical = 300+ people visible OR any pushing/crushing/falling observed
 
-Return ONLY this JSON, nothing else:
+RISK SCORE (be aggressive — err on the side of caution):
+  1–2  = Empty or sparse, no concerns
+  3–4  = Normal crowd, monitor only
+  5–6  = Elevated — density building, preventive action needed
+  7–8  = HIGH RISK — bottlenecks, restricted movement, distress signs visible
+  9–10 = CRITICAL — crushing imminent, people falling, immediate evacuation
+
+MOVEMENT PATTERNS that raise risk:
+  - People pushing against each other → risk +3
+  - Crowd converging on single point → risk +3
+  - People unable to move freely → risk +2
+  - Running or rushing → risk +2
+  - People looking back in fear → risk +2
+  - Bottleneck at exit → risk +3
+
+⚠️ DO NOT default to low scores. If you see 50+ people in a confined space, that is AT LEAST medium density and risk 4+. If movement is restricted, risk is 6+.
+
+Analyze this image now and return ONLY this JSON:
 {{
   "crowd_density": "empty/low/medium/high/critical",
-  "crowd_count_estimate": number,
+  "crowd_count_estimate": <count every visible person carefully>,
   "movement_pattern": "stationary/calm/moving/rushing/chaotic/converging/dispersing/pushing",
   "visible_distress": true or false,
-  "body_language": ["list", "of", "behaviors"],
+  "body_language": ["specific behaviors you observe"],
   "zone_descriptions": {{
     "north": "clear/crowded/blocked/danger",
     "south": "clear/crowded/blocked/danger",
@@ -105,11 +127,11 @@ Return ONLY this JSON, nothing else:
   }},
   "visible_exits_status": "open_and_clear/partially_blocked/blocked/not_visible",
   "bottleneck_detected": true or false,
-  "bottleneck_location": "describe exact location or none",
-  "immediate_threats": ["list any immediate physical dangers observed"],
-  "safe_direction": "north/south/east/west/multiple — safest direction to move crowd",
-  "risk_score": number from 1 to 10,
-  "scene_description": "one sentence describing exactly what you see"
+  "bottleneck_location": "exact location or none",
+  "immediate_threats": ["specific dangers observed, or none"],
+  "safe_direction": "north/south/east/west/multiple",
+  "risk_score": <integer 1-10, calibrated strictly to thresholds above>,
+  "scene_description": "one precise sentence: count, density, movement, any danger"
 }}"""
 
     headers = {

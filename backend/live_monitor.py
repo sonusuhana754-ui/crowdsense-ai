@@ -10,7 +10,7 @@ import base64
 from datetime import datetime
 from collections import deque
 
-from backend.vision_layer  import analyze_frame
+from backend.vision_layer  import analyze_frame, VENUE_MAP
 from backend.audio_layer   import analyze_live_audio
 from backend.fusion        import fuse_inputs
 from backend.reasoning     import reason_about_scene
@@ -37,6 +37,7 @@ class SystemState:
 
         # Latest frames (for dashboard display)
         self.frames_b64       = {}  # camera_id -> b64 string
+        self.raw_frames       = {}  # camera_id -> raw cv2 frame
 
         # Alert log (last 50 events)
         self.alert_log        = deque(maxlen=50)
@@ -67,13 +68,10 @@ class SystemState:
 
     def update_frame(self, camera_id, frame):
         """Store latest frame base64."""
-        import base64
         with self._lock:
             if frame is not None:
-                # Store the raw frame internally for the vision thread
-                if not hasattr(self, 'raw_frames'): self.raw_frames = {}
                 self.raw_frames[camera_id] = frame
-                _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 50])
+                _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
                 self.frames_b64[camera_id] = base64.b64encode(buf).decode()
 
     def add_alert(self, level: str, message: str):
@@ -88,6 +86,18 @@ class SystemState:
     def get_snapshot(self) -> dict:
         """Return full current state as dict (for API endpoint)."""
         with self._lock:
+            # Build risk history from alert log
+            risk_history = []
+            for entry in reversed(list(self.alert_log)):
+                import re
+                m = re.search(r'risk (\d+)/10', entry.get('message', ''))
+                if m:
+                    risk_history.append(int(m.group(1)))
+                if len(risk_history) >= 10:
+                    break
+
+            active_cameras = list(self.frames_b64.keys())
+
             return {
                 "vision":           dict(self.vision_results),
                 "audio":            dict(self.audio_result),
@@ -99,7 +109,9 @@ class SystemState:
                 "analysis_count":   self.analysis_count,
                 "last_updated":     self.last_analysis_time,
                 "current_risk":     self.current_risk,
-                "system_running":   self.is_running
+                "system_running":   self.is_running,
+                "active_cameras":   active_cameras,
+                "risk_history":     risk_history,
             }
 
 
@@ -154,34 +166,37 @@ def video_capture_thread(source, camera_id="CAM-1"):
 def vision_analysis_thread(camera_id="CAM-1", interval_seconds=10):
     """
     Every N seconds: grab current frame, run vision AI on it.
-    10 seconds = good balance of freshness vs API cost.
     """
+    import json
     print(f"[VisionThread] Started — analyzing every {interval_seconds}s")
     state.add_alert("INFO", "Vision analysis thread active")
 
+    # Build venue context once — passed to every frame analysis
+    venue_context = f"""Venue: Large public event space
+Exits: {json.dumps(VENUE_MAP['exits'])}
+Zones: {json.dumps(VENUE_MAP['zones'])}
+Total capacity: {VENUE_MAP['total_capacity']} persons
+Officer posts: {json.dumps(VENUE_MAP['officer_positions'])}"""
+
     while state.is_running:
-        if hasattr(state, 'raw_frames') and camera_id in state.raw_frames:
-            frame = state.raw_frames[camera_id]
-        else:
-            frame = None
+        frame = state.raw_frames.get(camera_id)
 
         if frame is not None:
             try:
                 print(f"\n[Vision] Analyzing {camera_id} at {datetime.now().strftime('%H:%M:%S')}...")
-                result = analyze_frame(frame, camera_id)
+                result = analyze_frame(frame, camera_id, venue_context)
                 state.update_vision(camera_id, result)
 
                 risk = result.get("risk_score", 0)
                 density = result.get("crowd_density", "?")
                 count = result.get("crowd_count_estimate", 0)
 
-                # Log based on severity
                 if risk >= 7:
-                    state.add_alert("CRIT", f"{camera_id} density {density} — risk {risk}/10 — {count} persons")
+                    state.add_alert("CRIT", f"{camera_id} — {density} density — risk {risk}/10 — {count} persons")
                 elif risk >= 4:
-                    state.add_alert("WARN", f"{camera_id} density {density} — risk {risk}/10")
+                    state.add_alert("WARN", f"{camera_id} — {density} density — risk {risk}/10")
                 else:
-                    state.add_alert("INFO", f"{camera_id} normal — {density} density — {count} persons")
+                    state.add_alert("INFO", f"{camera_id} — {density} density — {count} persons")
 
             except Exception as e:
                 print(f"[VisionThread] Error: {e}")
@@ -251,9 +266,12 @@ def intelligence_thread(interval_seconds=12):
             continue
 
         # Aggregate vision results across all cameras
-        # Pick the worst-case density label from any camera
-        density_order = ["critical", "high", "medium", "low", "empty", "unknown", "normal"]
-        all_densities = [v.get("crowd_density", "unknown") for v in vision_results.values()]
+        # Normalize any "normal" values the model returns to "low"
+        def _norm_density(d):
+            return {"normal": "low", "": "unknown"}.get(d, d) if d else "unknown"
+
+        density_order = ["critical", "high", "medium", "low", "empty", "unknown"]
+        all_densities = [_norm_density(v.get("crowd_density", "unknown")) for v in vision_results.values()]
         best_density = next((d for d in density_order if d in all_densities), "unknown")
 
         # Pick most common movement pattern
@@ -339,21 +357,26 @@ def intelligence_thread(interval_seconds=12):
 def start_monitoring():
     """
     Start all monitoring threads for both webcam and sample video.
+    Uses panic_crowd.mp4 if available, falls back to sample.mp4
     """
     global state
     state.is_running = True
 
+    # Use panic video for demo if available
+    import os
+    demo_video = "demo/panic_crowd.mp4" if os.path.exists("demo/panic_crowd.mp4") else "demo/sample.mp4"
+
     state.add_alert("INFO", "═══ CROWDSENSE AI SYSTEM INITIALISING ═══")
-    state.add_alert("INFO", "Loading AMD MI300X inference pipeline...")
-    state.add_alert("INFO", f"Starting Dual Cameras: 0 and demo/sample.mp4")
+    state.add_alert("INFO", "Loading Groq inference pipeline — Llama 4 Scout + Llama 3.3 70B")
+    state.add_alert("INFO", f"Starting Dual Cameras: webcam (CAM-1) + {demo_video} (CAM-2)")
 
     threads = [
         # Camera 1 (Webcam)
         threading.Thread(target=video_capture_thread, args=(0, "CAM-1"), daemon=True),
         threading.Thread(target=vision_analysis_thread, args=("CAM-1", 10), daemon=True),
-        
-        # Camera 2 (Sample Video)
-        threading.Thread(target=video_capture_thread, args=("demo/sample.mp4", "CAM-2"), daemon=True),
+
+        # Camera 2 (Panic demo video)
+        threading.Thread(target=video_capture_thread, args=(demo_video, "CAM-2"), daemon=True),
         threading.Thread(target=vision_analysis_thread, args=("CAM-2", 12), daemon=True),
 
         # Shared Audio & Intel
@@ -364,17 +387,18 @@ def start_monitoring():
     for t in threads:
         t.start()
 
-    state.add_alert("INFO", "All 4 monitoring threads active — system online")
-    print("\n[CrowdSense] [OK] All threads running. Call state.get_snapshot() for data.\n")
+    state.add_alert("INFO", "All monitoring threads active — system online")
+    print("\n[CrowdSense] ✓ All threads running.\n")
     return threads
 
 
 def stop_monitoring():
     global state
     state.is_running = False
+    # Don't clear frames immediately — let threads wind down first
+    # Threads check state.is_running and exit cleanly
+    print("[CrowdSense] Stopping all threads...")
+    time.sleep(1)
     with state._lock:
-        state.frames_b64.clear()
-        if hasattr(state, 'raw_frames'):
-            state.raw_frames.clear()
         state.vision_results.clear()
-    print("[CrowdSense] Stopping all threads and clearing feeds...")
+    print("[CrowdSense] Stopped.")

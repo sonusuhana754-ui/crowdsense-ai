@@ -21,7 +21,7 @@ if _PROVIDER == "amd":
 else:
     API_URL = "https://api.groq.com/openai/v1/chat/completions"
     API_KEY = os.getenv("GROQ_API_KEY", "")
-    MODEL   = "llama-3.3-70b-versatile"
+    MODEL   = "llama-3.1-8b-instant"   # 8B instant — 6x cheaper tokens than 70B, resets daily
     print(f"[Reasoning] Provider: Groq  |  Model: {MODEL}")
 
 if not API_KEY:
@@ -98,53 +98,55 @@ Respond ONLY in this exact JSON format, no extra text:
         "Content-Type": "application/json"
     }
 
-    try:
-        response = requests.post(
-            API_URL,
-            headers=headers,
-            json={
-                "model": MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 350,
-                "temperature": 0.1
-            },
-            timeout=30
-        )
+    for attempt in range(3):
+        try:
+            response = requests.post(
+                API_URL,
+                headers=headers,
+                json={
+                    "model": MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 350,
+                    "temperature": 0.1
+                },
+                timeout=30
+            )
+            data = response.json()
+            if "choices" not in data:
+                err = data.get("error", {})
+                if err.get("code") == "rate_limit_exceeded" and attempt < 2:
+                    import time as _t
+                    wait = 10 * (attempt + 1)
+                    print(f"[Reasoning] Rate limit — waiting {wait}s (attempt {attempt+1}/3)")
+                    _t.sleep(wait)
+                    continue
+                raise ValueError(f"API error: {err.get('message', data)}")
 
-        ai_text = response.json()["choices"][0]["message"]["content"]
+            ai_text = data["choices"][0]["message"]["content"]
+            start = ai_text.find("{")
+            end = ai_text.rfind("}") + 1
+            result = json.loads(ai_text[start:end])
+            return result
 
-        # Extract just the JSON part
-        start = ai_text.find("{")
-        end = ai_text.rfind("}") + 1
-        result = json.loads(ai_text[start:end])
+        except requests.exceptions.ConnectionError:
+            print(f"[Reasoning] ❌ Network error — cannot reach API")
+            break
+        except Exception as e:
+            print(f"[Reasoning] ❌ Failed (attempt {attempt+1}): {e}")
+            if attempt < 2:
+                import time as _t; _t.sleep(5)
+            continue
 
-        return result
-
-    except requests.exceptions.ConnectionError:
-        print(f"[Reasoning] ❌ Network error — cannot reach Groq API")
-        return {
-            "collective_intent": "unknown",
-            "risk_level": 5,
-            "primary_danger": "unknown",
-            "most_dangerous_zone": "south",
-            "second_dangerous_zone": "none",
-            "minutes_until_critical": 5,
-            "is_already_critical": False,
-            "key_risk_factor": "Network unavailable — check internet connection",
-            "reasoning": "Cannot reach AI API. Check internet connection and GROQ_API_KEY in .env",
-            "confidence": 0
-        }
-    except Exception as e:
-        print(f"[Reasoning] ❌ Failed: {e}")
-        return {
-            "collective_intent": "unknown",
-            "risk_level": 5,
-            "primary_danger": "unknown",
-            "most_dangerous_zone": "south",
-            "second_dangerous_zone": "none",
-            "minutes_until_critical": 5,
-            "is_already_critical": False,
-            "key_risk_factor": "Analysis failed - treat as medium risk",
-            "reasoning": f"Reasoning error: {str(e)[:100]}",
-            "confidence": 20
-        }
+    # All attempts failed — return safe fallback
+    return {
+        "collective_intent": "unknown",
+        "risk_level": 5,
+        "primary_danger": "unknown",
+        "most_dangerous_zone": "south",
+        "second_dangerous_zone": "none",
+        "minutes_until_critical": 5,
+        "is_already_critical": False,
+        "key_risk_factor": "Analysis failed — treat as medium risk",
+        "reasoning": "AI reasoning unavailable. Defaulting to medium risk. Check API key and network.",
+        "confidence": 0
+    }

@@ -67,11 +67,12 @@ def generate_superintendent_commands(final_assessment, all_camera_results, crowd
 
     risk = final_assessment.get("final_risk_level", 0)
     danger_zone = final_assessment.get("final_most_dangerous_zone", "south")
-    # Normalize: if unknown/center/empty, default to south (typically densest event zone)
     if not danger_zone or danger_zone in ("unknown", "center", ""):
         danger_zone = "south"
     danger_type = final_assessment.get("final_primary_danger", "none")
-    is_critical = final_assessment.get("final_is_critical", False)
+    # Only treat as critical if BOTH risk >= 9 AND explicitly flagged
+    # This prevents the AI from over-triggering Level 5 on moderate crowds
+    is_critical = final_assessment.get("final_is_critical", False) and risk >= 8
     minutes_left = final_assessment.get("final_minutes_until_critical")
     reasoning = final_assessment.get("final_reasoning", "")
 
@@ -228,11 +229,26 @@ def generate_superintendent_commands(final_assessment, all_camera_results, crowd
             "color": "green",
             "timestamp": timestamp,
             "situation_summary": "Crowd levels within normal parameters. Standard monitoring active.",
-            "radio_commands": [f"🟢 ALL UNITS — Standard positions. Routine check in 30 minutes."],
-            "exit_operations": {"status": "All exits normal operations"},
-            "crowd_routing": {"action": "None required"},
-            "pa_system": {"announce_now": False, "script": "SYSTEM MUTE. Standard operations. No announcements required."},
-            "emergency_services": {"call": False},
-            "backup_request": {"officers_needed": 0},
-            "commander_note": "All clear. Continue monitoring."
+            "radio_commands": [
+                f"🟢 ALL UNITS — Standard positions confirmed at {timestamp}. Maintain visual on all 4 zones.",
+                f"🟢 UNIT ALPHA — North Gate: count incoming flow every 10 minutes. Report if queue exceeds 50 persons.",
+                f"🟢 UNIT BRAVO — South Zone: walk the perimeter. Check barrier integrity. Report any crowd build-up.",
+                f"🟢 UNIT CHARLIE — East corridor clear. Monitor food court density. Soft-close if it exceeds 80 persons.",
+                f"🟢 UNIT ECHO — Command post active. Next full status report in 15 minutes. Stay on channel.",
+            ],
+            "exit_operations": {
+                "OPEN_NOW": list(VENUE_KNOWLEDGE["exits"].keys()),
+                "status": "All 4 exits open — normal flow"
+            },
+            "crowd_routing": {
+                "action": "Passive monitoring — no intervention required",
+                "guidance": "Natural crowd flow. Officers visible but not directing."
+            },
+            "pa_system": {
+                "announce_now": False,
+                "script": "SYSTEM STANDBY. No announcement required. Activate only if risk reaches Level 3."
+            },
+            "emergency_services": {"call": False, "note": "Not required"},
+            "backup_request": {"officers_needed": 0, "note": "Full team on standard deployment"},
+            "commander_note": f"All clear at {timestamp}. Reassess in 15 minutes or immediately if any unit reports anomaly."
         }

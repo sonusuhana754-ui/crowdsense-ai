@@ -31,11 +31,72 @@ def health():
 
 
 @app.post("/analyze")
-async def analyze_video_upload(video: UploadFile = File(...)):
-    """One-shot: upload video → full parallel pipeline → results."""
+async def analyze_video_upload(
+    video: UploadFile = File(...),
+    audio_scenario: str = "auto"   # auto | fight | panic | crush | evacuation | normal
+):
+    """
+    One-shot: upload video → full parallel pipeline → results.
+    audio_scenario overrides Whisper with a realistic crowd audio context
+    when the video has no useful audio track.
+    """
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as f:
         f.write(await video.read())
         path = f.name
+
+    # Realistic audio scenarios for crowd events
+    AUDIO_SCENARIOS = {
+        "fight": {
+            "transcription": "stop it, get off me, help, fight, security, move back, stop stop stop",
+            "panic_words_detected": 5,
+            "panic_words_found": ["stop", "help", "back", "move", "fight"],
+            "screaming_likely": True,
+            "audio_concern_level": "high",
+            "audio_risk_score": 7,
+            "analysis_success": True,
+            "scenario_note": "Fight detected — aggressive shouting, calls for security"
+        },
+        "panic": {
+            "transcription": "run run run, get out, emergency, help us, move move, out of the way, please help",
+            "panic_words_detected": 7,
+            "panic_words_found": ["run", "emergency", "help", "out", "move", "please"],
+            "screaming_likely": True,
+            "audio_concern_level": "critical",
+            "audio_risk_score": 9,
+            "analysis_success": True,
+            "scenario_note": "Mass panic — crowd running, screaming for exit"
+        },
+        "crush": {
+            "transcription": "push back, stop pushing, I can't breathe, help, crush, back up, stop",
+            "panic_words_detected": 6,
+            "panic_words_found": ["push", "back", "help", "crush", "stop"],
+            "screaming_likely": True,
+            "audio_concern_level": "critical",
+            "audio_risk_score": 10,
+            "analysis_success": True,
+            "scenario_note": "Crowd crush — people screaming they cannot breathe, pushing"
+        },
+        "evacuation": {
+            "transcription": "please exit calmly, move to the exits, this way please, keep moving, exit now",
+            "panic_words_detected": 2,
+            "panic_words_found": ["exit", "move"],
+            "screaming_likely": False,
+            "audio_concern_level": "medium",
+            "audio_risk_score": 4,
+            "analysis_success": True,
+            "scenario_note": "Controlled evacuation — PA system directing crowd to exits"
+        },
+        "normal": {
+            "transcription": "background crowd noise, music, general chatter",
+            "panic_words_detected": 0,
+            "panic_words_found": [],
+            "screaming_likely": False,
+            "audio_concern_level": "low",
+            "audio_risk_score": 1,
+            "analysis_success": True,
+            "scenario_note": "Normal crowd ambience"
+        },
+    }
 
     try:
         import asyncio
@@ -43,20 +104,22 @@ async def analyze_video_upload(video: UploadFile = File(...)):
 
         # ── STAGE 1: Vision + Audio in parallel ──────────────
         vision_future = loop.run_in_executor(_executor, analyze_video, path)
-        audio_future  = loop.run_in_executor(_executor, analyze_audio, path)
-        vision, audio = await asyncio.gather(vision_future, audio_future)
 
-        # ── STAGE 2: Fuse (instant) ───────────────────────────
+        if audio_scenario != "auto" and audio_scenario in AUDIO_SCENARIOS:
+            # Use injected audio scenario instead of Whisper
+            audio = AUDIO_SCENARIOS[audio_scenario]
+            vision = await vision_future
+        else:
+            # Run real Whisper audio analysis
+            audio_future = loop.run_in_executor(_executor, analyze_audio, path)
+            vision, audio = await asyncio.gather(vision_future, audio_future)
+
+        # ── STAGE 2: Fuse ─────────────────────────────────────
         fused = fuse_inputs(vision, audio)
 
-        # ── STAGE 3: Reasoning + Critic in parallel ───────────
-        # Critic needs initial result, so run reasoning first then critic
-        # But we can overlap: start reasoning, then critic immediately after
+        # ── STAGE 3: Reasoning → Critic ───────────────────────
         initial = await loop.run_in_executor(_executor, reason_about_scene, fused)
-
-        # Run critic and commands generation concurrently
-        critic_future   = loop.run_in_executor(_executor, critique_and_refine, vision, initial)
-        final = await critic_future
+        final   = await loop.run_in_executor(_executor, critique_and_refine, vision, initial)
 
         crowd_count = vision.get("crowd_count_estimate", 0) if vision else 0
         commands = generate_superintendent_commands(final, {}, crowd_count)
@@ -65,13 +128,24 @@ async def analyze_video_upload(video: UploadFile = File(...)):
             "success": True,
             "vision": vision, "audio": audio,
             "initial": initial, "final": final,
-            "commands": commands
+            "commands": commands,
+            "audio_scenario_used": audio_scenario
         }
     finally:
         try:
             os.remove(path)
         except Exception:
             pass
+
+
+@app.get("/demo/panic-video")
+def serve_panic_video():
+    """Serve the panic_crowd.mp4 demo file for CAM 3 auto-load."""
+    from fastapi.responses import FileResponse
+    path = "demo/panic_crowd.mp4"
+    if os.path.exists(path):
+        return FileResponse(path, media_type="video/mp4", filename="panic_crowd.mp4")
+    return JSONResponse({"error": "panic_crowd.mp4 not found — run: python demo/generate_panic_sample.py"}, status_code=404)
 
 
 @app.post("/live/start")
@@ -85,6 +159,129 @@ def start_live():
 def stop_live():
     stop_monitoring()
     return {"status": "stopped"}
+
+
+@app.post("/demo/scenario")
+async def inject_demo_scenario(scenario: str = "critical"):
+    """
+    Inject a realistic demo scenario directly into system state.
+    Runs the full AI reasoning + critic + commands pipeline on synthetic crowd data.
+    scenario = "normal" | "elevated" | "critical" | "catastrophic"
+    """
+    import asyncio
+    loop = asyncio.get_event_loop()
+
+    # Realistic synthetic vision data for each scenario
+    scenarios = {
+        "normal": {
+            "crowd_density": "medium", "crowd_count_estimate": 120,
+            "movement_pattern": "calm", "visible_distress": False,
+            "body_language": ["walking", "standing", "chatting"],
+            "zone_descriptions": {"north": "crowded", "south": "clear", "east": "crowded", "west": "clear"},
+            "visible_exits_status": "open_and_clear", "bottleneck_detected": False,
+            "bottleneck_location": "none", "immediate_threats": ["none"],
+            "safe_direction": "multiple", "risk_score": 3,
+            "scene_description": "Moderate crowd moving calmly through venue entrance area.",
+            "concern_areas": "none"
+        },
+        "elevated": {
+            "crowd_density": "high", "crowd_count_estimate": 380,
+            "movement_pattern": "converging", "visible_distress": False,
+            "body_language": ["pushing forward", "shoulder-to-shoulder", "slow movement"],
+            "zone_descriptions": {"north": "danger", "south": "crowded", "east": "crowded", "west": "clear"},
+            "visible_exits_status": "partially_blocked", "bottleneck_detected": True,
+            "bottleneck_location": "North gate entrance — crowd converging on single entry point",
+            "immediate_threats": ["bottleneck forming at north gate", "restricted movement in north zone"],
+            "safe_direction": "west", "risk_score": 6,
+            "scene_description": "Dense crowd converging on north gate, movement restricted, bottleneck forming.",
+            "concern_areas": "North gate bottleneck — 380 persons competing for single entry"
+        },
+        "critical": {
+            "crowd_density": "high", "crowd_count_estimate": 650,
+            "movement_pattern": "pushing", "visible_distress": True,
+            "body_language": ["pushing", "stumbling", "arms raised", "people falling", "panic faces"],
+            "zone_descriptions": {"north": "danger", "south": "danger", "east": "crowded", "west": "clear"},
+            "visible_exits_status": "partially_blocked", "bottleneck_detected": True,
+            "bottleneck_location": "South stage area — crowd surge toward stage barrier",
+            "immediate_threats": ["crowd crush imminent at south barrier", "people falling near stage", "exit E2 blocked by crowd"],
+            "safe_direction": "west", "risk_score": 8,
+            "scene_description": "Critical crowd surge at south stage — people pushing, some falling, crush risk imminent.",
+            "concern_areas": "South stage crush — 650 persons, barrier overwhelmed, people falling"
+        },
+        "catastrophic": {
+            "crowd_density": "critical", "crowd_count_estimate": 1200,
+            "movement_pattern": "chaotic", "visible_distress": True,
+            "body_language": ["running", "screaming", "falling", "trampling", "panic", "fighting crowd pressure"],
+            "zone_descriptions": {"north": "danger", "south": "danger", "east": "danger", "west": "crowded"},
+            "visible_exits_status": "blocked", "bottleneck_detected": True,
+            "bottleneck_location": "All exits — crowd blocking all egress points simultaneously",
+            "immediate_threats": ["active crowd crush", "people being trampled", "all exits blocked", "mass panic spreading"],
+            "safe_direction": "west", "risk_score": 10,
+            "scene_description": "CATASTROPHIC: Mass panic, 1200+ persons, active trampling, all exits blocked, immediate evacuation required.",
+            "concern_areas": "FULL VENUE CRITICAL — mass panic, trampling, blocked exits"
+        }
+    }
+
+    vision = scenarios.get(scenario, scenarios["critical"])
+    audio = {
+        "transcription": {
+            "normal": "background chatter, music",
+            "elevated": "loud crowd noise, some shouting",
+            "critical": "screaming, help, move back, push, stop pushing",
+            "catastrophic": "screaming, help us, fire, run, emergency, people dying"
+        }.get(scenario, "screaming, help, emergency"),
+        "panic_words_detected": {"normal": 0, "elevated": 1, "critical": 4, "catastrophic": 8}.get(scenario, 4),
+        "panic_words_found": {"normal": [], "elevated": ["push"], "critical": ["help", "stop", "push", "back"], "catastrophic": ["help", "fire", "run", "emergency", "dying", "stop", "push", "back"]}.get(scenario, []),
+        "screaming_likely": scenario in ("critical", "catastrophic"),
+        "audio_concern_level": {"normal": "low", "elevated": "medium", "critical": "high", "catastrophic": "critical"}.get(scenario, "high"),
+        "audio_risk_score": {"normal": 1, "elevated": 3, "critical": 7, "catastrophic": 10}.get(scenario, 7),
+        "analysis_success": True
+    }
+
+    fused = fuse_inputs(vision, audio)
+    initial = await loop.run_in_executor(_executor, reason_about_scene, fused)
+    final = await loop.run_in_executor(_executor, critique_and_refine, vision, initial)
+    crowd_count = vision["crowd_count_estimate"]
+    commands = generate_superintendent_commands(final, {}, crowd_count)
+
+    # Inject into live state so dashboard picks it up
+    state.update_vision("CAM-DEMO", vision)
+    state.update_audio(audio)
+    state.update_full_analysis(fused, initial, final, commands)
+    state.is_running = True
+
+    # Add dramatic alerts
+    alert_messages = {
+        "normal": [("INFO", "Demo scenario: Normal operations — 120 persons, calm movement")],
+        "elevated": [("WARN", "Demo scenario: Elevated risk — bottleneck forming at North gate"), ("WARN", "CAM-DEMO — high density — risk 6/10 — 380 persons")],
+        "critical": [("CRIT", "🚨 Demo scenario: CRITICAL — crowd crush imminent at South barrier"), ("CRIT", "CAM-DEMO — people falling — risk 8/10 — 650 persons"), ("WARN", "Audio: screaming detected — panic words: help, stop, push")],
+        "catastrophic": [("CRIT", "🚨🚨 Demo scenario: CATASTROPHIC — mass panic, 1200+ persons"), ("CRIT", "ALL EXITS BLOCKED — active trampling — EVACUATE NOW"), ("CRIT", "Audio: mass screaming — 8 panic words detected"), ("CRIT", f"AI Assessment: {final.get('final_reasoning', '')[:80]}")]
+    }
+    for level, msg in alert_messages.get(scenario, []):
+        state.add_alert(level, msg)
+
+    return {
+        "success": True,
+        "scenario": scenario,
+        "risk_level": final.get("final_risk_level"),
+        "incident_level": commands.get("incident_level"),
+        "crowd_count": crowd_count
+    }
+
+
+@app.post("/demo/reset")
+def reset_demo():
+    """Reset demo state back to idle."""
+    state.is_running = False
+    with state._lock:
+        state.vision_results.clear()
+        state.audio_result = {}
+        state.initial_result = {}
+        state.final_result = {}
+        state.commands = {}
+        state.current_risk = 0
+        state.alert_log.clear()
+    return {"success": True}
 
 
 @app.get("/live/status")
