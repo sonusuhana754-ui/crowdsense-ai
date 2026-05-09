@@ -138,16 +138,6 @@ async def analyze_video_upload(
             pass
 
 
-@app.get("/demo/panic-video")
-def serve_panic_video():
-    """Serve the panic_crowd.mp4 demo file for CAM 3 auto-load."""
-    from fastapi.responses import FileResponse
-    path = "demo/panic_crowd.mp4"
-    if os.path.exists(path):
-        return FileResponse(path, media_type="video/mp4", filename="panic_crowd.mp4")
-    return JSONResponse({"error": "panic_crowd.mp4 not found — run: python demo/generate_panic_sample.py"}, status_code=404)
-
-
 @app.post("/live/start")
 def start_live():
     """Start live monitoring with dual cameras."""

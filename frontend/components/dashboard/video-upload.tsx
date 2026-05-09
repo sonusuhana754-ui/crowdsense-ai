@@ -1,8 +1,8 @@
 "use client"
 
-import { useRef, useState, useCallback, useEffect } from "react"
+import { useRef, useState, useCallback } from "react"
 import { motion } from "framer-motion"
-import { Upload, Play, Pause, RotateCcw, Film, Zap } from "lucide-react"
+import { Upload, Play, Pause, RotateCcw, Film, Mic } from "lucide-react"
 
 export interface VideoAnalysisResult {
   success: boolean
@@ -11,59 +11,39 @@ export interface VideoAnalysisResult {
   initial: any
   final: any
   commands: any
+  audio_scenario_used?: string
 }
+
+type AudioScenario = "auto" | "normal" | "fight" | "panic" | "crush" | "evacuation"
+
+const AUDIO_SCENARIOS: { value: AudioScenario; label: string; color: string; desc: string }[] = [
+  { value: "auto",       label: "AUTO",       color: "#00d4ff", desc: "Real Whisper transcription" },
+  { value: "normal",     label: "NORMAL",     color: "#00ff9d", desc: "Calm crowd ambience" },
+  { value: "fight",      label: "FIGHT",      color: "#ffd000", desc: "Shouting, calls for security" },
+  { value: "panic",      label: "PANIC",      color: "#ff6600", desc: "Mass panic, running, screaming" },
+  { value: "crush",      label: "CRUSH",      color: "#ff0000", desc: "Can't breathe, crowd crush" },
+  { value: "evacuation", label: "EVACUATION", color: "#a78bfa", desc: "PA directing crowd to exits" },
+]
 
 interface VideoUploadProps {
   label: string
-  autoLoadDemo?: boolean          // CAM 03 gets the panic demo auto-loaded
   onVideoAnalysis?: (isAnalyzing: boolean) => void
   onAnalysisResult?: (result: VideoAnalysisResult) => void
 }
 
-export function VideoUpload({ label, autoLoadDemo, onVideoAnalysis, onAnalysisResult }: VideoUploadProps) {
+export function VideoUpload({ label, onVideoAnalysis, onAnalysisResult }: VideoUploadProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const fileRef = useRef<File | null>(null)
   const [videoUrl, setVideoUrl] = useState<string | null>(null)
-  const [videoName, setVideoName] = useState<string>("")
   const [isPlaying, setIsPlaying] = useState(false)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
   const [progress, setProgress] = useState(0)
   const [detectedCount, setDetectedCount] = useState<number | null>(null)
   const [analysisError, setAnalysisError] = useState<string | null>(null)
-  const [demoLoading, setDemoLoading] = useState(false)
-
-  // Auto-load panic demo video for CAM 03
-  const loadDemoVideo = useCallback(async () => {
-    setDemoLoading(true)
-    try {
-      const res = await fetch("http://127.0.0.1:8080/demo/panic-video")
-      if (!res.ok) throw new Error("Demo video not found")
-      const blob = await res.blob()
-      const file = new File([blob], "panic_crowd.mp4", { type: "video/mp4" })
-      const url = URL.createObjectURL(blob)
-      fileRef.current = file
-      setVideoUrl(url)
-      setVideoName("panic_crowd.mp4")
-      setIsPlaying(false)
-      setIsAnalyzing(false)
-      setProgress(0)
-      setDetectedCount(null)
-      setAnalysisError(null)
-    } catch (e) {
-      setAnalysisError("Demo video not found — run: python demo/generate_panic_sample.py")
-    } finally {
-      setDemoLoading(false)
-    }
-  }, [])
-
-  // Auto-load on mount for CAM 03
-  useEffect(() => {
-    if (autoLoadDemo) {
-      loadDemoVideo()
-    }
-  }, [autoLoadDemo, loadDemoVideo])
+  const [audioScenario, setAudioScenario] = useState<AudioScenario>("auto")
+  const [showScenarioPicker, setShowScenarioPicker] = useState(false)
 
   const handleFile = useCallback((file: File) => {
     const validTypes = ['video/mp4', 'video/webm', 'video/quicktime', 'video/x-msvideo']
@@ -74,7 +54,6 @@ export function VideoUpload({ label, autoLoadDemo, onVideoAnalysis, onAnalysisRe
     const url = URL.createObjectURL(file)
     fileRef.current = file
     setVideoUrl(url)
-    setVideoName(file.name)
     setIsPlaying(false)
     setIsAnalyzing(false)
     setProgress(0)
@@ -98,11 +77,8 @@ export function VideoUpload({ label, autoLoadDemo, onVideoAnalysis, onAnalysisRe
     try {
       const formData = new FormData()
       formData.append("video", file)
-      // Always use AUTO — let Whisper analyze the real audio track
-      const res = await fetch("http://127.0.0.1:8080/analyze?audio_scenario=auto", {
-        method: "POST",
-        body: formData,
-      })
+      const url = `http://127.0.0.1:8080/analyze?audio_scenario=${audioScenario}`
+      const res = await fetch(url, { method: "POST", body: formData })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const result: VideoAnalysisResult = await res.json()
       setDetectedCount(result.vision?.crowd_count_estimate ?? null)
@@ -114,7 +90,7 @@ export function VideoUpload({ label, autoLoadDemo, onVideoAnalysis, onAnalysisRe
       setIsAnalyzing(false)
       onVideoAnalysis?.(false)
     }
-  }, [onAnalysisResult, onVideoAnalysis])
+  }, [audioScenario, onAnalysisResult, onVideoAnalysis])
 
   const togglePlay = useCallback(() => {
     if (!videoRef.current) return
@@ -142,11 +118,13 @@ export function VideoUpload({ label, autoLoadDemo, onVideoAnalysis, onAnalysisRe
   }, [onVideoAnalysis])
 
   const resetVideo = useCallback(() => {
-    setVideoUrl(null); setVideoName(""); setIsPlaying(false); setIsAnalyzing(false)
+    setVideoUrl(null); setIsPlaying(false); setIsAnalyzing(false)
     setProgress(0); setDetectedCount(null); setAnalysisError(null)
     fileRef.current = null
     if (inputRef.current) inputRef.current.value = ''
   }, [])
+
+  const selectedScenario = AUDIO_SCENARIOS.find(s => s.value === audioScenario)!
 
   return (
     <motion.div
@@ -168,45 +146,25 @@ export function VideoUpload({ label, autoLoadDemo, onVideoAnalysis, onAnalysisRe
 
       {/* Video Container */}
       <div className="aspect-video bg-[#05080d] relative">
-        {demoLoading ? (
-          <div className="flex flex-col items-center justify-center h-full gap-2">
-            <motion.div className="w-6 h-6 border-2 border-[#00d4ff] border-t-transparent rounded-full"
-              animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: "linear" }} />
-            <span className="font-mono text-[9px] text-[#5a6f85]">LOADING DEMO...</span>
-          </div>
-        ) : videoUrl ? (
+        {videoUrl ? (
           <>
-            <video ref={videoRef} src={videoUrl} className="w-full h-full object-cover"
-              onTimeUpdate={handleTimeUpdate} onEnded={handleEnded} />
-
-            {/* Analysis overlay */}
+            <video ref={videoRef} src={videoUrl} className="w-full h-full object-cover" onTimeUpdate={handleTimeUpdate} onEnded={handleEnded} />
             {isAnalyzing && (
               <div className="absolute inset-0 pointer-events-none">
-                <div className="absolute inset-0 opacity-20" style={{
-                  backgroundImage: `linear-gradient(rgba(0,212,255,0.3) 1px,transparent 1px),linear-gradient(90deg,rgba(0,212,255,0.3) 1px,transparent 1px)`,
-                  backgroundSize: '30px 30px'
-                }} />
-                <motion.div className="absolute inset-x-0 h-[2px] bg-gradient-to-r from-transparent via-[#ffd000] to-transparent"
-                  animate={{ top: ['0%','100%'] }} transition={{ duration: 1.5, repeat: Infinity, ease: "linear" }} />
-                <motion.div className="absolute border-2 border-[#00ff9d] rounded" style={{ width:'18%', height:'28%' }}
-                  animate={{ left:['15%','55%','25%'], top:['25%','45%','35%'], opacity:[0.7,1,0.7] }}
-                  transition={{ duration: 3, repeat: Infinity }} />
-                <motion.div className="absolute border-2 border-[#ff6600] rounded" style={{ width:'14%', height:'22%' }}
-                  animate={{ left:['55%','30%','60%'], top:['40%','20%','50%'], opacity:[1,0.7,1] }}
-                  transition={{ duration: 4, repeat: Infinity }} />
+                <div className="absolute inset-0 opacity-20" style={{ backgroundImage: `linear-gradient(rgba(0,212,255,0.3) 1px,transparent 1px),linear-gradient(90deg,rgba(0,212,255,0.3) 1px,transparent 1px)`, backgroundSize: '30px 30px' }} />
+                <motion.div className="absolute inset-x-0 h-[2px] bg-gradient-to-r from-transparent via-[#ffd000] to-transparent" animate={{ top: ['0%','100%'] }} transition={{ duration: 1.5, repeat: Infinity, ease: "linear" }} />
+                <motion.div className="absolute border-2 border-[#00ff9d] rounded" style={{ width:'18%', height:'28%' }} animate={{ left:['15%','55%','25%'], top:['25%','45%','35%'], opacity:[0.7,1,0.7] }} transition={{ duration: 3, repeat: Infinity }} />
+                <motion.div className="absolute border-2 border-[#ff6600] rounded" style={{ width:'14%', height:'22%' }} animate={{ left:['55%','30%','60%'], top:['40%','20%','50%'], opacity:[1,0.7,1] }} transition={{ duration: 4, repeat: Infinity }} />
                 <div className="absolute top-4 left-4 bg-black/70 px-2 py-1 rounded font-mono text-[10px] text-[#00d4ff]">
                   DETECTED: <span className="text-[#00ff9d]">{detectedCount !== null ? detectedCount : "..."}</span>
                 </div>
+                {/* Audio scenario badge */}
+                <div className="absolute top-4 right-4 bg-black/70 px-2 py-1 rounded font-mono text-[9px] flex items-center gap-1" style={{ color: selectedScenario.color }}>
+                  <Mic className="w-2.5 h-2.5" />
+                  {selectedScenario.label}
+                </div>
               </div>
             )}
-
-            {/* Video name badge */}
-            {videoName && !isAnalyzing && (
-              <div className="absolute bottom-4 left-2 right-2 bg-black/60 px-2 py-1 rounded font-mono text-[8px] text-[#5a6f85] truncate text-center">
-                {videoName}
-              </div>
-            )}
-
             {analysisError && (
               <div className="absolute bottom-8 left-2 right-2 bg-black/80 px-2 py-1 rounded font-mono text-[9px] text-[#ff3a3a] text-center">{analysisError}</div>
             )}
@@ -217,11 +175,9 @@ export function VideoUpload({ label, autoLoadDemo, onVideoAnalysis, onAnalysisRe
         ) : (
           <div
             className={`flex flex-col items-center justify-center h-full border-2 border-dashed m-2 rounded-lg transition-colors cursor-pointer ${isDragging ? 'border-[#00d4ff] bg-[#00d4ff]/5' : 'border-[#1a2332] hover:border-[#00d4ff]/50'}`}
-            onDrop={handleDrop} onDragOver={handleDragOver} onDragLeave={handleDragLeave}
-            onClick={() => inputRef.current?.click()}
+            onDrop={handleDrop} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onClick={() => inputRef.current?.click()}
           >
-            <input ref={inputRef} type="file" accept="video/mp4,video/webm,video/quicktime,video/x-msvideo"
-              className="hidden" onChange={handleFileInput} />
+            <input ref={inputRef} type="file" accept="video/mp4,video/webm,video/quicktime,video/x-msvideo" className="hidden" onChange={handleFileInput} />
             <Upload className={`w-8 h-8 md:w-10 md:h-10 mb-2 ${isDragging ? 'text-[#00d4ff]' : 'text-[#5a6f85]'}`} />
             <span className="font-mono text-[9px] md:text-xs text-[#5a6f85] text-center px-4">DROP VIDEO OR CLICK TO UPLOAD</span>
             <span className="font-mono text-[8px] md:text-[10px] text-[#3a4a5a] mt-1">MP4, WebM, MOV, AVI</span>
@@ -230,42 +186,53 @@ export function VideoUpload({ label, autoLoadDemo, onVideoAnalysis, onAnalysisRe
       </div>
 
       {/* Controls */}
-      <div className="flex items-center justify-between p-2 bg-[#05080d] border-t border-[#1a2332]">
-        {videoUrl ? (
-          <>
-            <button onClick={togglePlay}
-              className="flex items-center gap-1.5 px-2 md:px-3 py-1.5 rounded font-mono text-[9px] md:text-[10px] tracking-wider bg-[#00d4ff]/20 text-[#00d4ff] border border-[#00d4ff]/40 hover:bg-[#00d4ff]/30 transition-all">
-              {isPlaying ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
-              {isPlaying ? 'PAUSE' : 'ANALYZE'}
-            </button>
-            <div className="flex items-center gap-1.5">
-              {autoLoadDemo && (
-                <button onClick={loadDemoVideo} title="Reload demo video"
-                  className="p-1.5 rounded border border-[#ffd000]/30 text-[#ffd000]/60 hover:text-[#ffd000] hover:border-[#ffd000]/60 transition-colors">
-                  <Zap className="w-3 h-3" />
-                </button>
-              )}
-              <button onClick={resetVideo}
-                className="p-1.5 rounded border border-[#1a2332] text-[#5a6f85] hover:text-[#ff0000] hover:border-[#ff0000]/40 transition-colors">
+      <div className="bg-[#05080d] border-t border-[#1a2332]">
+        {/* Audio scenario picker */}
+        <div className="px-2 pt-2 pb-1">
+          <div className="flex items-center gap-1 flex-wrap">
+            <Mic className="w-2.5 h-2.5 text-[#5a6f85] flex-shrink-0" />
+            <span className="font-mono text-[8px] text-[#5a6f85] uppercase tracking-wider mr-1">Audio:</span>
+            {AUDIO_SCENARIOS.map(s => (
+              <button key={s.value} onClick={() => setAudioScenario(s.value)}
+                title={s.desc}
+                className="px-1.5 py-0.5 font-mono text-[8px] rounded transition-all border"
+                style={{
+                  borderColor: audioScenario === s.value ? s.color : 'rgba(26,35,50,1)',
+                  color: audioScenario === s.value ? s.color : '#4a6a7a',
+                  background: audioScenario === s.value ? `${s.color}15` : 'transparent',
+                  fontWeight: audioScenario === s.value ? 700 : 400,
+                }}>
+                {s.label}
+              </button>
+            ))}
+          </div>
+          {audioScenario !== "auto" && (
+            <div className="font-mono text-[8px] mt-1 pl-4" style={{ color: selectedScenario.color }}>
+              ↳ {selectedScenario.desc}
+            </div>
+          )}
+        </div>
+
+        {/* Play/Reset */}
+        <div className="flex items-center justify-between px-2 pb-2">
+          {videoUrl ? (
+            <>
+              <button onClick={togglePlay}
+                className="flex items-center gap-1.5 px-2 md:px-3 py-1.5 rounded font-mono text-[9px] md:text-[10px] tracking-wider bg-[#00d4ff]/20 text-[#00d4ff] border border-[#00d4ff]/40 hover:bg-[#00d4ff]/30 transition-all">
+                {isPlaying ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
+                {isPlaying ? 'PAUSE' : 'ANALYZE'}
+              </button>
+              <button onClick={resetVideo} className="p-1.5 rounded border border-[#1a2332] text-[#5a6f85] hover:text-[#ff0000] hover:border-[#ff0000]/40 transition-colors">
                 <RotateCcw className="w-3 h-3" />
               </button>
-            </div>
-          </>
-        ) : (
-          <div className="flex items-center justify-between w-full">
+            </>
+          ) : (
             <div className="flex items-center gap-1.5 text-[#5a6f85] font-mono text-[9px] md:text-[10px]">
               <Film className="w-3 h-3" />
               NO VIDEO LOADED
             </div>
-            {autoLoadDemo && (
-              <button onClick={loadDemoVideo}
-                className="flex items-center gap-1 px-2 py-1 rounded font-mono text-[8px] border border-[#ffd000]/40 text-[#ffd000] hover:bg-[#ffd000]/10 transition-all">
-                <Zap className="w-2.5 h-2.5" />
-                LOAD DEMO
-              </button>
-            )}
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </motion.div>
   )

@@ -16,11 +16,9 @@ import { LiveReasoningStream, type BackendData } from "@/components/dashboard/li
 type ExitStatus = "open" | "partial" | "congested" | "blocked"
 
 function resolveExitStatus(exitOps: any, exitId: string): ExitStatus {
-  // OPEN_IMMEDIATELY can be ["E1 — North Main Exit", ...] or ["E1", ...]
-  const normalize = (arr: string[]) => arr.map((s: string) => s.split(/[\s—]/)[0].trim())
-  const openNow: string[] = normalize(exitOps?.OPEN_IMMEDIATELY ?? exitOps?.OPEN_NOW ?? [])
-  const prepare: string[] = normalize(exitOps?.PREPARE_TO_OPEN ?? exitOps?.OPEN_QUIETLY ?? [])
-  const closeNow: string[] = normalize(exitOps?.CLOSE_NOW ?? [])
+  const openNow: string[] = exitOps?.OPEN_IMMEDIATELY ?? exitOps?.OPEN_NOW ?? []
+  const prepare: string[] = exitOps?.PREPARE_TO_OPEN ?? exitOps?.OPEN_QUIETLY ?? []
+  const closeNow: string[] = (exitOps?.CLOSE_NOW ?? []).map((s: string) => s.split(" ")[0])
   if (closeNow.includes(exitId)) return "blocked"
   if (openNow.includes(exitId)) return "open"
   if (prepare.includes(exitId)) return "partial"
@@ -28,12 +26,11 @@ function resolveExitStatus(exitOps: any, exitId: string): ExitStatus {
 }
 
 function resolveExitAction(exitOps: any, exitId: string): string {
-  const normalize = (arr: string[]) => arr.map((s: string) => s.split(/[\s—]/)[0].trim())
-  const openNow: string[] = normalize(exitOps?.OPEN_IMMEDIATELY ?? exitOps?.OPEN_NOW ?? [])
-  const closeNow: string[] = normalize(exitOps?.CLOSE_NOW ?? [])
-  if (closeNow.includes(exitId)) return "CLOSED — DANGER ZONE"
-  if (openNow.includes(exitId)) return "OPEN — ACTIVE FLOW"
-  return "STANDBY"
+  const openNow: string[] = exitOps?.OPEN_IMMEDIATELY ?? exitOps?.OPEN_NOW ?? []
+  const closeNow: string[] = (exitOps?.CLOSE_NOW ?? []).map((s: string) => s.split(" ")[0])
+  if (closeNow.includes(exitId)) return "CLOSED"
+  if (openNow.includes(exitId)) return "OPEN — ACTIVE"
+  return "NORMAL"
 }
 
 export default function DashboardPage() {

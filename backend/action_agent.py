@@ -67,12 +67,11 @@ def generate_superintendent_commands(final_assessment, all_camera_results, crowd
 
     risk = final_assessment.get("final_risk_level", 0)
     danger_zone = final_assessment.get("final_most_dangerous_zone", "south")
+    # Normalize: if unknown/center/empty, default to south (typically densest event zone)
     if not danger_zone or danger_zone in ("unknown", "center", ""):
         danger_zone = "south"
     danger_type = final_assessment.get("final_primary_danger", "none")
-    # Only treat as critical if BOTH risk >= 9 AND explicitly flagged
-    # This prevents the AI from over-triggering Level 5 on moderate crowds
-    is_critical = final_assessment.get("final_is_critical", False) and risk >= 8
+    is_critical = final_assessment.get("final_is_critical", False)
     minutes_left = final_assessment.get("final_minutes_until_critical")
     reasoning = final_assessment.get("final_reasoning", "")
 
