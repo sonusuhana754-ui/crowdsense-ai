@@ -136,7 +136,48 @@ Navigate to [http://localhost:3000/dashboard](http://localhost:3000/dashboard)
 
 ---
 
-## ⚡ Quick Demo (No Setup Required)
+## ⚡ Demo Mode — No Backend Required
+
+Click the **"▶ Run Demo"** button (gold/orange, top of dashboard). The entire system runs **100% in the browser** — no backend, no API key, no setup needed.
+
+The demo runs a 4-step escalating sequence automatically (7 seconds per step):
+
+| Step | Scenario | Crowd | Risk | Level | What you see |
+|------|----------|-------|------|-------|--------------|
+| 1 | Normal Operations | 124 persons | 3/10 | Level 2 | Calm commands, all exits open, low audio |
+| 2 | Elevated Risk | 387 persons | 6/10 | Level 3 | Bottleneck detected, west gate opened quietly |
+| 3 | Critical Incident | 652 persons | 8/10 | Level 4 | Screaming detected, crush imminent, PA activated |
+| 4 | Catastrophic | 1247 persons | 10/10 | Level 5 | Mass panic, all units deployed, emergency services called |
+
+**Every panel updates with realistic data:**
+- Risk Index, Incident Level badge, Crowd Count, Density, T-Minus countdown
+- AI Reasoning Stream — step-by-step Llama analysis events
+- Junior Analyst vs Senior Critic — risk scores, what junior missed, what was confirmed
+- Superintendent radio commands — specific unit orders (Alpha, Bravo, Charlie...)
+- Exit status table — exits flip from OPEN → BLOCKED as danger zone changes
+- PA announcement script — escalates from silent to urgent evacuation
+- Audio Intelligence — panic keywords, screaming detection, transcription
+- Alert Log — fills with INFO → WARN → CRIT events
+
+**Jump to any step** using the scenario buttons that appear once demo mode is active.
+
+> A yellow **"⚡ DEMO MODE"** banner shows at the top. Click **"Exit Demo"** to return to real data mode.
+
+---
+
+## 🔴 Real Data Mode vs Demo Mode
+
+| | Real Data Mode | Demo Mode |
+|---|---|---|
+| **Activate** | Click "▶ Start Live Monitoring" or upload a video | Click "▶ Run Demo" |
+| **Backend needed** | ✅ Yes — `uvicorn backend.main:app` | ❌ No — runs entirely in browser |
+| **Vision AI** | Llama 4 Scout 17B analyzes real camera frames | Pre-computed realistic crowd analysis |
+| **Audio AI** | Whisper transcribes real mic/video audio | Pre-scripted panic audio scenarios |
+| **Reasoning** | Real Groq API calls on actual scene data | Hardcoded expert-level AI reasoning text |
+| **Commands** | Generated from what AI actually sees | Realistic superintendent commands per scenario |
+| **Banner** | None | Yellow "⚡ DEMO MODE" banner |
+
+---
 
 > **Don't have a Groq API key yet?** You can still see the full system in action using the built-in demo mode.
 

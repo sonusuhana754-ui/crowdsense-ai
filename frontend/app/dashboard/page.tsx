@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react"
-import { motion } from "framer-motion"
+import { motion, AnimatePresence } from "framer-motion"
 import { DashboardHeader } from "@/components/dashboard/header"
 import { DashboardBackground } from "@/components/dashboard/background"
 import { SectionTitle, StatCard, LevelBadge } from "@/components/dashboard/stats"
@@ -11,6 +11,7 @@ import { WebcamFeed } from "@/components/dashboard/webcam-feed"
 import { VideoUpload, type VideoAnalysisResult } from "@/components/dashboard/video-upload"
 import { VenueFloorPlan } from "@/components/dashboard/floor-plan"
 import { LiveReasoningStream, type BackendData } from "@/components/dashboard/live-reasoning-stream"
+import { DEMO_SCENARIOS, type DemoScenario } from "@/lib/demo-data"
 
 // ── Exit status helpers ──────────────────────────────────────
 type ExitStatus = "open" | "partial" | "congested" | "blocked"
@@ -45,11 +46,18 @@ export default function DashboardPage() {
 
   const [alerts, setAlerts] = useState<Alert[]>([])
   const [riskScore, setRiskScore] = useState(0)
-  const [incidentLevel, setIncidentLevel] = useState(1)
+  const [incidentLevel, setIncidentLevel] = useState<1|2|3|4|5>(1)
   const [crowdCount, setCrowdCount] = useState(0)
   const [density, setDensity] = useState(0.0)
   const [countdownSecs, setCountdownSecs] = useState(0)
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // ── DEMO MODE STATE (pure frontend, no backend needed) ──────
+  const [demoMode, setDemoMode] = useState(false)
+  const [demoRunning, setDemoRunning] = useState(false)
+  const [demoStep, setDemoStep] = useState(0)
+  const [demoScenario, setDemoScenario] = useState<DemoScenario | null>(null)
+  const demoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Boot sequence
   useEffect(() => {
@@ -160,22 +168,45 @@ export default function DashboardPage() {
     } catch {}
   }
 
-  const [demoRunning, setDemoRunning] = useState(false)
-  const [demoStep, setDemoStep] = useState(0)
+  // ── Pure frontend demo — no backend needed ──────────────────
+  const applyDemoScenario = useCallback((scenario: DemoScenario) => {
+    setDemoScenario(scenario)
+    setRiskScore(scenario.riskScore)
+    setIncidentLevel(scenario.incidentLevel)
+    setCrowdCount(scenario.crowdCount)
+    setDensity(scenario.density)
+    setCountdownSecs(scenario.countdownMins * 60)
+    setAlerts(scenario.alerts.map((a, i) => ({
+      id: `demo-${i}-${a.time}`,
+      time: a.time,
+      severity: (a.level === "CRIT" ? "crit" : a.level === "WARN" ? "warn" : "info") as Alert["severity"],
+      message: a.message,
+    })))
+  }, [])
 
-  // Full escalating demo sequence: normal → elevated → critical → catastrophic
   const runFullDemo = useCallback(async () => {
+    setDemoMode(true)
     setDemoRunning(true)
-    setDemoStep(0)
-    const steps: Array<"normal" | "elevated" | "critical" | "catastrophic"> = ["normal", "elevated", "critical", "catastrophic"]
-    for (let i = 0; i < steps.length; i++) {
+    for (let i = 0; i < DEMO_SCENARIOS.length; i++) {
       setDemoStep(i + 1)
-      try { await fetch(`http://127.0.0.1:8080/demo/scenario?scenario=${steps[i]}`, { method: "POST" }) } catch {}
-      if (i < steps.length - 1) await new Promise(r => setTimeout(r, 6000)) // 6s between steps
+      applyDemoScenario(DEMO_SCENARIOS[i])
+      if (i < DEMO_SCENARIOS.length - 1) {
+        await new Promise(r => { demoTimerRef.current = setTimeout(r, 7000) })
+      }
     }
     setDemoRunning(false)
     setDemoStep(0)
+  }, [applyDemoScenario])
+
+  const stopDemoMode = useCallback(() => {
+    if (demoTimerRef.current) clearTimeout(demoTimerRef.current)
+    setDemoMode(false)
+    setDemoRunning(false)
+    setDemoStep(0)
+    setDemoScenario(null)
+    setRiskScore(0); setCrowdCount(0); setDensity(0); setCountdownSecs(0); setAlerts([])
   }, [])
+
   const countdownColorClass = useMemo(() => {
     const m = Math.floor(countdownSecs / 60)
     return m > 15 ? "risk-normal" : m > 5 ? "risk-elevated" : "risk-critical"
@@ -183,11 +214,21 @@ export default function DashboardPage() {
 
   const riskColorClass = riskScore >= 8 ? "risk-critical" : riskScore >= 5 ? "risk-elevated" : "risk-normal"
 
-  // Active data source — live monitoring takes priority over upload
-  const activeData: BackendData | null = backendData?.system_running ? backendData : (uploadData ? {
+  // Active data source — demo mode > live monitoring > upload
+  const activeData: BackendData | null = demoMode && demoScenario ? {
+    vision: { "CAM-DEMO": demoScenario.vision as any },
+    audio: demoScenario.audio as any,
+    initial: demoScenario.initial as any,
+    final: demoScenario.final as any,
+    commands: demoScenario.commands as any,
+    alert_log: demoScenario.alerts as any,
+    analysis_count: demoStep,
+    risk_history: DEMO_SCENARIOS.slice(0, demoStep).map(s => s.riskScore),
+    active_cameras: ["CAM-DEMO"],
+    system_running: true,
+  } : backendData?.system_running ? backendData : (uploadData ? {
     final: uploadData.final, initial: uploadData.initial,
     vision: { "CAM-UPLOAD": uploadData.vision }, commands: uploadData.commands,
-    // Use the video's own audio, not the live mic
     audio: uploadData.audio,
     alert_log: [],
   } : null)
@@ -256,30 +297,38 @@ export default function DashboardPage() {
         <main className="p-3 md:p-5 max-w-[1800px] mx-auto">
 
           {/* ── DEMO MODE BANNER ─────────────────────────────── */}
-          {demoRunning && (
+          <AnimatePresence>
+          {demoMode && (
             <motion.div
               className="mb-5 px-5 py-3 rounded-lg border-2 border-[#ffd000] flex items-center gap-4"
               style={{ background: "linear-gradient(90deg, rgba(255,208,0,0.08), rgba(255,102,0,0.08))" }}
-              animate={{ opacity: [1, 0.85, 1] }} transition={{ duration: 1.5, repeat: Infinity }}>
+              initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
               <motion.div className="w-3 h-3 rounded-full bg-[#ffd000] flex-shrink-0"
                 animate={{ scale: [1, 1.4, 1] }} transition={{ duration: 0.8, repeat: Infinity }} />
-              <div>
+              <div className="flex-1">
                 <div className="font-mono text-sm font-bold text-[#ffd000] tracking-wider">
-                  DEMO MODE ACTIVE — Step {demoStep}/4: {["","NORMAL OPERATIONS","ELEVATED RISK","CRITICAL INCIDENT","CATASTROPHIC"][demoStep]}
+                  ⚡ DEMO MODE — {demoRunning ? `Step ${demoStep}/4: ${DEMO_SCENARIOS[demoStep-1]?.label ?? ""}` : `Showing: ${demoScenario?.label ?? ""}`}
                 </div>
                 <div className="font-mono text-[10px] text-[#8aa0b4] mt-0.5">
-                  Simulated crowd scenario — all AI models running on real synthetic data · Next step in ~6s
+                  No backend required · All AI analysis, commands, alerts and intelligence shown below are pre-computed realistic outputs
                 </div>
               </div>
-              <div className="ml-auto flex gap-1">
-                {[1,2,3,4].map(n => (
-                  <div key={n} className="w-2 h-2 rounded-full" style={{
-                    background: n <= demoStep ? (n >= 4 ? "#ff0000" : n >= 3 ? "#ff6600" : n >= 2 ? "#ffd000" : "#00ff9d") : "#1a2332"
-                  }} />
+              {/* Step dots */}
+              <div className="flex gap-1.5 items-center">
+                {DEMO_SCENARIOS.map((s, i) => (
+                  <button key={i} onClick={() => { setDemoStep(i+1); applyDemoScenario(s) }}
+                    className="w-2.5 h-2.5 rounded-full transition-all"
+                    style={{ background: i < demoStep ? (i >= 3 ? "#ff0000" : i >= 2 ? "#ff6600" : i >= 1 ? "#ffd000" : "#00ff9d") : "#1a2332",
+                      transform: i === demoStep-1 ? "scale(1.4)" : "scale(1)" }} />
                 ))}
               </div>
+              <button onClick={stopDemoMode}
+                className="font-mono text-[9px] px-3 py-1.5 rounded border border-[#5a6f85]/40 text-[#5a6f85] hover:border-[#ff3a3a]/50 hover:text-[#ff3a3a] transition-all uppercase tracking-wider">
+                Exit Demo
+              </button>
             </motion.div>
           )}
+          </AnimatePresence>
 
           {/* ── TOP CONTROLS ─────────────────────────────────── */}
           <div className="flex flex-wrap justify-between items-center mb-5 gap-3">
@@ -289,37 +338,40 @@ export default function DashboardPage() {
             <div className="flex flex-wrap gap-2 items-center">
 
               {/* ── BIG DEMO BUTTON ── */}
-              {!demoRunning ? (
+              {!demoMode ? (
                 <button onClick={runFullDemo}
                   className="px-6 py-2.5 font-mono text-sm font-bold tracking-wider rounded-lg uppercase transition-all flex items-center gap-2"
                   style={{
                     background: "linear-gradient(135deg, #ffd000, #ff6600)",
                     color: "#000",
-                    boxShadow: "0 0 20px rgba(255,208,0,0.4)"
+                    boxShadow: "0 0 24px rgba(255,208,0,0.5)"
                   }}>
-                  <span className="text-base">▶</span> Run Full Demo
+                  <span className="text-base">▶</span> Run Demo
                 </button>
               ) : (
-                <button onClick={() => { setDemoRunning(false); setDemoStep(0); resetDemo() }}
-                  className="px-6 py-2.5 font-mono text-sm font-bold tracking-wider rounded-lg uppercase border border-[#5a6f85]/50 text-[#5a6f85] hover:border-[#ff3a3a]/50 hover:text-[#ff3a3a] transition-all">
-                  ✕ Stop Demo
+                <button onClick={stopDemoMode}
+                  className="px-6 py-2.5 font-mono text-sm font-bold tracking-wider rounded-lg uppercase border-2 border-[#ffd000]/60 text-[#ffd000] hover:bg-[#ffd000]/10 transition-all">
+                  ✕ Exit Demo
                 </button>
               )}
 
-              {/* Individual scenario buttons */}
-              <div className="flex gap-1.5 items-center border border-[#1a2332] rounded px-3 py-1.5">
-                <span className="font-mono text-[9px] text-[#5a6f85] uppercase tracking-widest mr-1">Scenario:</span>
-                {(["normal","elevated","critical","catastrophic"] as const).map(s => (
-                  <button key={s} onClick={() => triggerDemo(s)}
-                    className={`px-2.5 py-1 font-mono text-[9px] font-bold tracking-wider rounded uppercase transition-all border ${
-                      s === "normal"        ? "border-[#00ff9d]/50 text-[#00ff9d] hover:bg-[#00ff9d]/10" :
-                      s === "elevated"      ? "border-[#ffd000]/50 text-[#ffd000] hover:bg-[#ffd000]/10" :
-                      s === "critical"      ? "border-[#ff6600]/50 text-[#ff6600] hover:bg-[#ff6600]/10" :
-                                             "border-[#ff0000]/60 text-[#ff0000] hover:bg-[#ff0000]/10"
-                    }`}>{s}</button>
-                ))}
-                <button onClick={resetDemo} className="px-2.5 py-1 font-mono text-[9px] tracking-wider rounded uppercase border border-[#5a6f85]/40 text-[#5a6f85] hover:bg-[#5a6f85]/10 transition-all">RESET</button>
-              </div>
+              {/* Individual scenario jump buttons — only in demo mode */}
+              {demoMode && (
+                <div className="flex gap-1.5 items-center border border-[#1a2332] rounded px-3 py-1.5">
+                  <span className="font-mono text-[9px] text-[#5a6f85] uppercase tracking-widest mr-1">Jump:</span>
+                  {DEMO_SCENARIOS.map((s, i) => (
+                    <button key={i} onClick={() => { setDemoStep(i+1); applyDemoScenario(s) }}
+                      className="px-2.5 py-1 font-mono text-[9px] font-bold tracking-wider rounded uppercase transition-all border"
+                      style={{
+                        borderColor: i === demoStep-1 ? (i >= 3 ? "#ff0000" : i >= 2 ? "#ff6600" : i >= 1 ? "#ffd000" : "#00ff9d") : "rgba(26,35,50,1)",
+                        color: i >= 3 ? "#ff0000" : i >= 2 ? "#ff6600" : i >= 1 ? "#ffd000" : "#00ff9d",
+                        background: i === demoStep-1 ? `${i >= 3 ? "#ff0000" : i >= 2 ? "#ff6600" : i >= 1 ? "#ffd000" : "#00ff9d"}15` : "transparent"
+                      }}>
+                      {s.label.split(" ")[0]}
+                    </button>
+                  ))}
+                </div>
+              )}
 
               {!backendData?.system_running ? (
                 <button onClick={startAnalysis}
