@@ -3,6 +3,7 @@
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 import tempfile, os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -18,6 +19,10 @@ app = FastAPI(title="CrowdSense AI", version="1.0")
 
 app.add_middleware(CORSMiddleware,
     allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+# Serve demo videos as static files so frontend can load them
+if os.path.exists("demo"):
+    app.mount("/demo", StaticFiles(directory="demo"), name="demo")
 
 # Shared thread pool — reused across requests
 _executor = ThreadPoolExecutor(max_workers=4)
@@ -232,6 +237,8 @@ async def inject_demo_scenario(scenario: str = "critical"):
     initial = await loop.run_in_executor(_executor, reason_about_scene, fused)
     final = await loop.run_in_executor(_executor, critique_and_refine, vision, initial)
     crowd_count = vision["crowd_count_estimate"]
+    # Never force is_critical from demo data — let AI risk score decide
+    final["final_is_critical"] = final.get("final_risk_level", 0) >= 9
     commands = generate_superintendent_commands(final, {}, crowd_count)
 
     # Inject into live state so dashboard picks it up

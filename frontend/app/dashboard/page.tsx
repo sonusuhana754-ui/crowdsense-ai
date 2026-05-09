@@ -166,12 +166,35 @@ export default function DashboardPage() {
     return m > 15 ? "risk-normal" : m > 5 ? "risk-elevated" : "risk-critical"
   }, [countdownSecs])
 
-  // Active data source
+  // Active data source — live monitoring takes priority over upload
   const activeData: BackendData | null = backendData?.system_running ? backendData : (uploadData ? {
     final: uploadData.final, initial: uploadData.initial,
-    vision: { "CAM-UPLOAD": uploadData.vision }, commands: uploadData.commands, alert_log: [],
+    vision: { "CAM-UPLOAD": uploadData.vision }, commands: uploadData.commands,
+    // Use the video's own audio, not the live mic
+    audio: uploadData.audio,
+    alert_log: [],
   } : null)
 
+  // Audio — prefer video upload audio over live mic (mic gives useless ambient noise)
+  const audioData = uploadData?.audio ?? (activeData?.audio as any)
+  const audioRisk = audioData?.audio_risk_score ?? 0
+  const audioConcern = (audioData?.audio_concern_level ?? "low").toUpperCase()
+  const audioTranscript = audioData?.transcription ?? "—"
+  const panicWords = audioData?.panic_words_found ?? []
+  const screaming = audioData?.screaming_likely ?? false
+
+  // Junior / Senior reasoning text
+  const initialReasoning = activeData?.initial?.reasoning ?? ""
+  const initialRisk = (activeData?.initial as any)?.risk_level ?? 0
+  const initialDanger = (activeData?.initial as any)?.primary_danger ?? "—"
+  const initialZone = (activeData?.initial as any)?.most_dangerous_zone ?? "—"
+  const initialConfidence = (activeData?.initial as any)?.confidence ?? 0
+
+  const finalReasoning = activeData?.final?.final_reasoning ?? ""
+  const finalRisk = activeData?.final?.final_risk_level ?? 0
+  const whatMissed = activeData?.final?.what_junior_missed ?? ""
+  const whatRight = (activeData?.final as any)?.what_junior_got_right ?? ""
+  const finalConfidence = activeData?.final?.final_confidence ?? 0
   const superCommandsRaw: string[] = activeData?.commands?.radio_commands ?? []
   const commandColor = (activeData?.commands?.color ?? "green") as "blue" | "orange" | "red" | "green"
   const superintendentCommands = superCommandsRaw.length > 0
@@ -194,14 +217,6 @@ export default function DashboardPage() {
   const paMessage = (activeData?.commands as any)?.pa_system?.script ?? "No PA announcements required."
   const countdownMins = Math.floor(countdownSecs / 60)
   const countdownSecsPart = countdownSecs % 60
-
-  // Audio data for display
-  const audioData = activeData?.audio as any
-  const audioRisk = audioData?.audio_risk_score ?? 0
-  const audioConcern = (audioData?.audio_concern_level ?? "low").toUpperCase()
-  const audioTranscript = audioData?.transcription ?? "—"
-  const panicWords = audioData?.panic_words_found ?? []
-  const screaming = audioData?.screaming_likely ?? false
 
   if (isInitializing) {
     return (
@@ -261,7 +276,7 @@ export default function DashboardPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 md:gap-4 mb-5">
             <WebcamFeed label="CAM 01 · WEBCAM LIVE" isActive={webcam1Active} onToggle={() => setWebcam1Active(!webcam1Active)} customFrame={(backendData as any)?.frames_b64?.["CAM-1"]} />
             <WebcamFeed label="CAM 02 · SAMPLE VIDEO" isActive={webcam2Active} onToggle={() => setWebcam2Active(!webcam2Active)} customFrame={(backendData as any)?.frames_b64?.["CAM-2"]} />
-            <VideoUpload label="CAM 03 · UPLOAD VIDEO" onAnalysisResult={handleUploadResult} />
+            <VideoUpload label="CAM 03 · PANIC DEMO" defaultVideo="/panic_crowd.mp4" onAnalysisResult={handleUploadResult} />
             <VideoUpload label="CAM 04 · UPLOAD VIDEO" onAnalysisResult={handleUploadResult} />
           </div>
 
@@ -291,7 +306,6 @@ export default function DashboardPage() {
             Live AI Reasoning Stream · Dual-Model Intelligence
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 md:gap-4 mb-5">
-            {/* Reasoning stream — takes 2/3 width */}
             <div className="lg:col-span-2">
               <LiveReasoningStream data={activeData} />
             </div>
@@ -418,6 +432,56 @@ export default function DashboardPage() {
               </motion.div>
             </div>
           </div>
+
+          {/* ── JUNIOR / SENIOR ANALYST PANELS ──────────────── */}
+          {(initialReasoning || finalReasoning) && (
+            <>
+              <div className="font-mono text-xs font-bold tracking-[0.2em] text-[#00d4ff] uppercase border-l-[3px] border-[#00d4ff] pl-3 mb-4">
+                Dual-Model Assessment · Junior Analyst → Senior Critic
+              </div>
+              <div className="grid md:grid-cols-2 gap-3 md:gap-4 mb-5">
+                {/* Junior */}
+                <motion.div className="bg-[#0a0f18] border border-[#1a2332] border-l-[3px] border-l-[#5a6f85] rounded-md p-4"
+                  initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }}>
+                  <div className="font-mono text-[10px] text-[#8aa0b4] uppercase tracking-[0.2em] mb-3">⚙ Junior Analyst · Initial Assessment</div>
+                  <div className="flex gap-3 mb-3 flex-wrap">
+                    <span className="font-mono text-[9px] px-2 py-0.5 rounded bg-[#1a2332] text-[#ffe44d]">RISK {initialRisk}/10</span>
+                    <span className="font-mono text-[9px] px-2 py-0.5 rounded bg-[#1a2332] text-[#8aa0b4]">DANGER: {initialDanger.toUpperCase()}</span>
+                    <span className="font-mono text-[9px] px-2 py-0.5 rounded bg-[#1a2332] text-[#8aa0b4]">ZONE: {initialZone.toUpperCase()}</span>
+                    <span className="font-mono text-[9px] px-2 py-0.5 rounded bg-[#1a2332] text-[#5a6f85]">CONF: {initialConfidence}%</span>
+                  </div>
+                  <p className="text-xs leading-relaxed text-[#cfdde9]">{initialReasoning || "Awaiting analysis..."}</p>
+                  <p className="font-mono text-[9px] text-[#5a6f85] italic mt-3">— Llama 3.1 8B · Initial crowd dynamics assessment</p>
+                </motion.div>
+
+                {/* Senior Critic */}
+                <motion.div className="bg-[#0a0f18] border border-[#1a2332] border-l-[3px] border-l-[#00d4ff] rounded-md p-4"
+                  style={{ boxShadow: "0 0 18px rgba(0,212,255,0.1)" }}
+                  initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 0.1 }}>
+                  <div className="font-mono text-[10px] text-[#00d4ff] uppercase tracking-[0.2em] mb-3">★ Senior Critic · Refined Assessment</div>
+                  <div className="flex gap-3 mb-3 flex-wrap">
+                    <span className="font-mono text-[9px] px-2 py-0.5 rounded font-bold" style={{
+                      background: finalRisk >= 7 ? "rgba(255,34,68,0.15)" : finalRisk >= 5 ? "rgba(255,140,0,0.15)" : "rgba(0,212,255,0.1)",
+                      color: finalRisk >= 7 ? "#ff2244" : finalRisk >= 5 ? "#ff8c00" : "#00d4ff"
+                    }}>FINAL RISK {finalRisk}/10</span>
+                    <span className="font-mono text-[9px] px-2 py-0.5 rounded bg-[#1a2332] text-[#00d4ff]">CONF: {finalConfidence}%</span>
+                  </div>
+                  <p className="text-xs leading-relaxed text-[#cfdde9] mb-3">{finalReasoning || "Awaiting critic refinement..."}</p>
+                  {whatMissed && whatMissed !== "Critic unavailable — using junior assessment" && (
+                    <div className="text-[10px] text-[#ff8c00] bg-[rgba(255,140,0,0.06)] rounded p-2 border border-[#ff8c00]/20 mb-2">
+                      <span className="font-bold">Junior missed:</span> {whatMissed}
+                    </div>
+                  )}
+                  {whatRight && whatRight !== "Initial assessment used as final" && (
+                    <div className="text-[10px] text-[#00ff9d] bg-[rgba(0,255,157,0.05)] rounded p-2 border border-[#00ff9d]/20">
+                      <span className="font-bold">Confirmed:</span> {whatRight}
+                    </div>
+                  )}
+                  <p className="font-mono text-[9px] text-[#00d4ff] italic mt-3">— Llama 3.1 8B · Senior critic override</p>
+                </motion.div>
+              </div>
+            </>
+          )}
 
           {/* ── SUPERINTENDENT COMMANDS ───────────────────────── */}
           <div className="font-mono text-xs font-bold tracking-[0.2em] text-[#00d4ff] uppercase border-l-[3px] border-[#00d4ff] pl-3 mb-4">

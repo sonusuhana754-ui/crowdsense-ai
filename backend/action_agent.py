@@ -167,9 +167,9 @@ def generate_superintendent_commands(final_assessment, all_camera_results, crowd
             },
 
             "pa_system": {
-                "announce_now": False,
-                "script": f"Exits {', '.join(safe_exits)} are now open for your convenience. Feel free to use them.",
-                "trigger_when": "Risk reaches 8 or Alpha reports barrier failing"
+                "announce_now": True,
+                "script": f"Attention all guests. For your safety, please begin moving toward the nearest exit. {' and '.join([VENUE_KNOWLEDGE['exits'][e]['name'] for e in safe_exits[:2]])} are now open. Please move calmly and steadily. Do not push. Help those around you.",
+                "trigger_when": "NOW — risk is at Level 4"
             },
 
             "emergency_services": {

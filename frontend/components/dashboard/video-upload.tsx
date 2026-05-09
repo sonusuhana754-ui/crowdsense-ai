@@ -1,6 +1,6 @@
 "use client"
 
-import { useRef, useState, useCallback } from "react"
+import { useRef, useState, useCallback, useEffect } from "react"
 import { motion } from "framer-motion"
 import { Upload, Play, Pause, RotateCcw, Film, Mic } from "lucide-react"
 
@@ -27,11 +27,12 @@ const AUDIO_SCENARIOS: { value: AudioScenario; label: string; color: string; des
 
 interface VideoUploadProps {
   label: string
+  defaultVideo?: string   // URL to auto-load (e.g. "/demo/panic_crowd.mp4" from backend)
   onVideoAnalysis?: (isAnalyzing: boolean) => void
   onAnalysisResult?: (result: VideoAnalysisResult) => void
 }
 
-export function VideoUpload({ label, onVideoAnalysis, onAnalysisResult }: VideoUploadProps) {
+export function VideoUpload({ label, defaultVideo, onVideoAnalysis, onAnalysisResult }: VideoUploadProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const fileRef = useRef<File | null>(null)
@@ -44,6 +45,21 @@ export function VideoUpload({ label, onVideoAnalysis, onAnalysisResult }: VideoU
   const [analysisError, setAnalysisError] = useState<string | null>(null)
   const [audioScenario, setAudioScenario] = useState<AudioScenario>("auto")
   const [showScenarioPicker, setShowScenarioPicker] = useState(false)
+
+  // Auto-load default video from backend on mount
+  useEffect(() => {
+    if (!defaultVideo) return
+    const backendUrl = `http://127.0.0.1:8080${defaultVideo}`
+    fetch(backendUrl, { method: "HEAD" })
+      .then(r => {
+        if (r.ok) {
+          setVideoUrl(backendUrl)
+          // Store a reference so sendToBackend can fetch it
+          fileRef.current = null  // no File object, URL will be used directly
+        }
+      })
+      .catch(() => {}) // backend not running yet, ignore
+  }, [defaultVideo])
 
   const handleFile = useCallback((file: File) => {
     const validTypes = ['video/mp4', 'video/webm', 'video/quicktime', 'video/x-msvideo']
@@ -73,12 +89,27 @@ export function VideoUpload({ label, onVideoAnalysis, onAnalysisResult }: VideoU
     const file = e.target.files?.[0]; if (file) handleFile(file)
   }, [handleFile])
 
-  const sendToBackend = useCallback(async (file: File) => {
+  const sendToBackend = useCallback(async (file: File | null) => {
     try {
-      const formData = new FormData()
-      formData.append("video", file)
+      let res: Response
       const url = `http://127.0.0.1:8080/analyze?audio_scenario=${audioScenario}`
-      const res = await fetch(url, { method: "POST", body: formData })
+
+      if (file) {
+        // Uploaded file — send as multipart
+        const formData = new FormData()
+        formData.append("video", file)
+        res = await fetch(url, { method: "POST", body: formData })
+      } else if (defaultVideo) {
+        // Default video — fetch from backend static, re-upload as blob
+        const videoRes = await fetch(`http://127.0.0.1:8080${defaultVideo}`)
+        const blob = await videoRes.blob()
+        const formData = new FormData()
+        formData.append("video", blob, "panic_crowd.mp4")
+        res = await fetch(url, { method: "POST", body: formData })
+      } else {
+        throw new Error("No video source")
+      }
+
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const result: VideoAnalysisResult = await res.json()
       setDetectedCount(result.vision?.crowd_count_estimate ?? null)
@@ -90,7 +121,7 @@ export function VideoUpload({ label, onVideoAnalysis, onAnalysisResult }: VideoU
       setIsAnalyzing(false)
       onVideoAnalysis?.(false)
     }
-  }, [audioScenario, onAnalysisResult, onVideoAnalysis])
+  }, [audioScenario, defaultVideo, onAnalysisResult, onVideoAnalysis])
 
   const togglePlay = useCallback(() => {
     if (!videoRef.current) return
@@ -102,7 +133,7 @@ export function VideoUpload({ label, onVideoAnalysis, onAnalysisResult }: VideoU
         setIsAnalyzing(true)
         setAnalysisError(null)
         onVideoAnalysis?.(true)
-        if (fileRef.current) sendToBackend(fileRef.current)
+        sendToBackend(fileRef.current)
       }
     }
     setIsPlaying(!isPlaying)
