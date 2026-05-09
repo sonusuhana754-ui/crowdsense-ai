@@ -136,7 +136,50 @@ Navigate to [http://localhost:3000/dashboard](http://localhost:3000/dashboard)
 
 ---
 
-## Usage
+## ⚡ Quick Demo (No Setup Required)
+
+> **Don't have a Groq API key yet?** You can still see the full system in action using the built-in demo mode.
+
+Once the backend is running, click the **"▶ Run Full Demo"** button at the top of the dashboard.
+
+The demo runs a 4-step escalating sequence — each step calls the real AI pipeline with synthetic crowd data:
+
+| Step | Scenario | Crowd | Risk | Incident Level |
+|------|----------|-------|------|----------------|
+| 1 | Normal Operations | 120 persons | 3/10 | Level 1-2 |
+| 2 | Elevated Risk | 380 persons, bottleneck | 6/10 | Level 3 |
+| 3 | Critical Incident | 650 persons, crush imminent | 8/10 | Level 4-5 |
+| 4 | Catastrophic | 1200 persons, mass panic | 10/10 | Level 5 |
+
+**What you'll see during the demo:**
+- Risk Index climbing from 3 → 10
+- Incident Level badge escalating from green → red
+- AI Reasoning Stream showing real Llama 3.1 analysis of the crowd data
+- Junior Analyst vs Senior Critic disagreeing and refining the assessment
+- Superintendent radio commands changing from "standard patrol" to "EVACUATE NOW"
+- Exit statuses flipping from OPEN → BLOCKED
+- PA script changing from silent to urgent evacuation announcement
+- Alert log filling with WARN and CRIT events
+- T-Minus countdown ticking toward zero
+
+> **A yellow "DEMO MODE ACTIVE" banner** appears at the top while the demo runs, clearly indicating this is simulated data.
+
+---
+
+## 🔴 Real Data Mode vs Demo Mode
+
+| | Real Data Mode | Demo Mode |
+|---|---|---|
+| **How to activate** | Click "▶ Start Live Monitoring" or upload a video | Click "▶ Run Full Demo" |
+| **Vision AI** | Analyzes actual camera frames via Llama 4 Scout 17B | Synthetic crowd data fed to Llama 3.1 8B |
+| **Audio AI** | Real Whisper transcription from mic or video file | Pre-scripted panic audio scenarios |
+| **Reasoning** | Real Groq API calls on actual scene data | Real Groq API calls on synthetic scene data |
+| **Commands** | Based on what AI actually sees | Based on realistic crowd scenarios |
+| **Banner** | None (live data) | Yellow "DEMO MODE ACTIVE" banner |
+
+**Both modes use the real AI pipeline** — the only difference is the input data source. Demo mode feeds realistic synthetic crowd scenarios to the same Llama models that analyze real video.
+
+---
 
 ### Demo Mode (no video needed)
 Click the **Demo** buttons at the top of the dashboard:

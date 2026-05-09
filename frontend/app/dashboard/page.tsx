@@ -160,11 +160,28 @@ export default function DashboardPage() {
     } catch {}
   }
 
-  const riskColorClass = useMemo(() => riskScore >= 8 ? "risk-critical" : riskScore >= 5 ? "risk-elevated" : "risk-normal", [riskScore])
+  const [demoRunning, setDemoRunning] = useState(false)
+  const [demoStep, setDemoStep] = useState(0)
+
+  // Full escalating demo sequence: normal → elevated → critical → catastrophic
+  const runFullDemo = useCallback(async () => {
+    setDemoRunning(true)
+    setDemoStep(0)
+    const steps: Array<"normal" | "elevated" | "critical" | "catastrophic"> = ["normal", "elevated", "critical", "catastrophic"]
+    for (let i = 0; i < steps.length; i++) {
+      setDemoStep(i + 1)
+      try { await fetch(`http://127.0.0.1:8080/demo/scenario?scenario=${steps[i]}`, { method: "POST" }) } catch {}
+      if (i < steps.length - 1) await new Promise(r => setTimeout(r, 6000)) // 6s between steps
+    }
+    setDemoRunning(false)
+    setDemoStep(0)
+  }, [])
   const countdownColorClass = useMemo(() => {
     const m = Math.floor(countdownSecs / 60)
     return m > 15 ? "risk-normal" : m > 5 ? "risk-elevated" : "risk-critical"
   }, [countdownSecs])
+
+  const riskColorClass = riskScore >= 8 ? "risk-critical" : riskScore >= 5 ? "risk-elevated" : "risk-normal"
 
   // Active data source — live monitoring takes priority over upload
   const activeData: BackendData | null = backendData?.system_running ? backendData : (uploadData ? {
@@ -238,26 +255,72 @@ export default function DashboardPage() {
 
         <main className="p-3 md:p-5 max-w-[1800px] mx-auto">
 
+          {/* ── DEMO MODE BANNER ─────────────────────────────── */}
+          {demoRunning && (
+            <motion.div
+              className="mb-5 px-5 py-3 rounded-lg border-2 border-[#ffd000] flex items-center gap-4"
+              style={{ background: "linear-gradient(90deg, rgba(255,208,0,0.08), rgba(255,102,0,0.08))" }}
+              animate={{ opacity: [1, 0.85, 1] }} transition={{ duration: 1.5, repeat: Infinity }}>
+              <motion.div className="w-3 h-3 rounded-full bg-[#ffd000] flex-shrink-0"
+                animate={{ scale: [1, 1.4, 1] }} transition={{ duration: 0.8, repeat: Infinity }} />
+              <div>
+                <div className="font-mono text-sm font-bold text-[#ffd000] tracking-wider">
+                  DEMO MODE ACTIVE — Step {demoStep}/4: {["","NORMAL OPERATIONS","ELEVATED RISK","CRITICAL INCIDENT","CATASTROPHIC"][demoStep]}
+                </div>
+                <div className="font-mono text-[10px] text-[#8aa0b4] mt-0.5">
+                  Simulated crowd scenario — all AI models running on real synthetic data · Next step in ~6s
+                </div>
+              </div>
+              <div className="ml-auto flex gap-1">
+                {[1,2,3,4].map(n => (
+                  <div key={n} className="w-2 h-2 rounded-full" style={{
+                    background: n <= demoStep ? (n >= 4 ? "#ff0000" : n >= 3 ? "#ff6600" : n >= 2 ? "#ffd000" : "#00ff9d") : "#1a2332"
+                  }} />
+                ))}
+              </div>
+            </motion.div>
+          )}
+
           {/* ── TOP CONTROLS ─────────────────────────────────── */}
           <div className="flex flex-wrap justify-between items-center mb-5 gap-3">
             <div className="font-mono text-xs md:text-sm font-bold tracking-[0.2em] text-[#00d4ff] uppercase border-l-[3px] border-[#00d4ff] pl-3">
               Live Camera Matrix · AI Multi-Feed Surveillance
             </div>
             <div className="flex flex-wrap gap-2 items-center">
-              {/* Demo buttons */}
+
+              {/* ── BIG DEMO BUTTON ── */}
+              {!demoRunning ? (
+                <button onClick={runFullDemo}
+                  className="px-6 py-2.5 font-mono text-sm font-bold tracking-wider rounded-lg uppercase transition-all flex items-center gap-2"
+                  style={{
+                    background: "linear-gradient(135deg, #ffd000, #ff6600)",
+                    color: "#000",
+                    boxShadow: "0 0 20px rgba(255,208,0,0.4)"
+                  }}>
+                  <span className="text-base">▶</span> Run Full Demo
+                </button>
+              ) : (
+                <button onClick={() => { setDemoRunning(false); setDemoStep(0); resetDemo() }}
+                  className="px-6 py-2.5 font-mono text-sm font-bold tracking-wider rounded-lg uppercase border border-[#5a6f85]/50 text-[#5a6f85] hover:border-[#ff3a3a]/50 hover:text-[#ff3a3a] transition-all">
+                  ✕ Stop Demo
+                </button>
+              )}
+
+              {/* Individual scenario buttons */}
               <div className="flex gap-1.5 items-center border border-[#1a2332] rounded px-3 py-1.5">
-                <span className="font-mono text-[9px] text-[#5a6f85] uppercase tracking-widest mr-1">Demo:</span>
+                <span className="font-mono text-[9px] text-[#5a6f85] uppercase tracking-widest mr-1">Scenario:</span>
                 {(["normal","elevated","critical","catastrophic"] as const).map(s => (
                   <button key={s} onClick={() => triggerDemo(s)}
                     className={`px-2.5 py-1 font-mono text-[9px] font-bold tracking-wider rounded uppercase transition-all border ${
                       s === "normal"        ? "border-[#00ff9d]/50 text-[#00ff9d] hover:bg-[#00ff9d]/10" :
                       s === "elevated"      ? "border-[#ffd000]/50 text-[#ffd000] hover:bg-[#ffd000]/10" :
                       s === "critical"      ? "border-[#ff6600]/50 text-[#ff6600] hover:bg-[#ff6600]/10" :
-                                             "border-[#ff0000]/60 text-[#ff0000] hover:bg-[#ff0000]/10 animate-pulse"
+                                             "border-[#ff0000]/60 text-[#ff0000] hover:bg-[#ff0000]/10"
                     }`}>{s}</button>
                 ))}
                 <button onClick={resetDemo} className="px-2.5 py-1 font-mono text-[9px] tracking-wider rounded uppercase border border-[#5a6f85]/40 text-[#5a6f85] hover:bg-[#5a6f85]/10 transition-all">RESET</button>
               </div>
+
               {!backendData?.system_running ? (
                 <button onClick={startAnalysis}
                   className="px-5 py-2 bg-gradient-to-r from-[#00d4ff] to-[#0099cc] text-black font-mono text-xs font-bold tracking-wider rounded hover:shadow-[0_0_20px_rgba(0,212,255,0.6)] transition-all uppercase">
