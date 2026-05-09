@@ -14,6 +14,8 @@ from backend.reasoning     import reason_about_scene
 from backend.critic        import critique_and_refine
 from backend.action_agent  import generate_superintendent_commands
 from backend.live_monitor  import start_monitoring, stop_monitoring, state
+from dotenv import load_dotenv
+load_dotenv()
 
 app = FastAPI(title="CrowdSense AI", version="1.0")
 
