@@ -4,7 +4,22 @@
 
 CrowdSense AI is a real-time crowd safety platform that uses multimodal AI (vision + audio) to analyze live camera feeds, detect crowd crush risks, and generate actionable superintendent commands — all in under 10 seconds.
 
+
+**🔗 Live Website:** https://crowdsense-ai-flame.vercel.app
+
+**🎥 Demo Video:** https://youtu.be/ZNDPIMc3Un0
+
+
 ---
+
+![Next.js](https://img.shields.io/badge/Next.js-000000?style=flat&logo=next.js&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat&logo=typescript&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3776AB?style=flat&logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat&logo=fastapi&logoColor=white)
+![Google Gemini](https://img.shields.io/badge/Google_Gemini-4285F4?style=flat&logo=google&logoColor=white)
+![Groq](https://img.shields.io/badge/Groq-F55036?style=flat)
+![Computer Vision](https://img.shields.io/badge/Computer_Vision-AI-purple?style=flat)
+![Vercel](https://img.shields.io/badge/Vercel-Deployed-black?style=flat&logo=vercel)
 
 ## Screenshots
 
